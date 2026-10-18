@@ -22,3 +22,6 @@ export function periodRange(day,period){
  if(period==='month'){start.setUTCDate(1);end=new Date(Date.UTC(date.getUTCFullYear(),date.getUTCMonth()+1,0,12));}
  return [start.toISOString().slice(0,10),end.toISOString().slice(0,10)];
 }
+
+export const canOperateShift=(access,day,shift)=>access?.role==='staff'&&canShift(access,day,shift);
+export const shiftState=(access,db,day,shift)=>db.closings.some(c=>c.day===day&&c.shift===Number(shift))?'closed':access?.shiftSessions?.find(s=>s.day===day&&s.shift===Number(shift))?.status||'pending';

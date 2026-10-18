@@ -5,6 +5,7 @@ const jwt=()=>`${Buffer.from(JSON.stringify({alg:'HS256',typ:'JWT'})).toString('
 export async function mock(context,server){
  const day=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Ho_Chi_Minh',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
  server.access??={shopId:'test-shop',shopName:'Lam An',userId:user.id,email:user.email,role:'admin',assignments:[],members:[{user_id:user.id,email:user.email,role:'admin',active:true,display_name:'Admin'}],proposals:[]};
+ server.access.shiftSessions??=[1,2,3].map(shift=>({day,shift,status:'open',opened_by:user.id,opened_by_email:'staff@example.test'}));
  const view=()=>{const w=server.workspace||{data:{menu:[],orders:[],closings:[]},revision:0};return {...w,access:server.access};};
 
  await context.route(`${endpoint}/**`,async route=>{
@@ -27,6 +28,7 @@ export async function mock(context,server){
   if(path==='/rest/v1/rpc/pos_list_audit')return reply(server.audit||[]);
   if(path==='/rest/v1/rpc/pos_manage'){
    const {action,payload}=request.postDataJSON();server.calls??=[];server.calls.push({action,payload});
+   if(action==='shift.open'){server.access.shiftSessions=server.access.shiftSessions.filter(s=>s.day!==payload.day||s.shift!==payload.shift);server.access.shiftSessions.push({...payload,status:'open',opened_by:user.id,opened_by_email:user.email});}
    if(action==='member.add')server.access.members.push({user_id:'staff-new',email:payload.email,display_name:payload.name,role:payload.role,active:true});
    if(action==='member.update'){const m=server.access.members.find(m=>m.user_id===payload.userId);Object.assign(m,payload);}
    if(action==='assignment.set'){

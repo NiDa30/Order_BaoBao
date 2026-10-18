@@ -55,7 +55,7 @@ Supabase tự cung cấp các biến server `SUPABASE_URL`, `SUPABASE_ANON_KEY`,
 | Hủy đơn | Cả đơn chưa/đã thu | Chỉ đơn chưa thu trong ca được phân công |
 | Thay đổi menu, đổi giá | Cập nhật trực tiếp; duyệt đề xuất | Gửi đề xuất, không trực tiếp đổi menu chung |
 | Doanh thu | Ngày, tuần (thứ Hai–Chủ nhật), tháng, lọc ca | Chỉ ca được phân công |
-| Kết ca | Mọi ca | Ca được phân công |
+| Mở / đóng ca | Không | Ca được phân công |
 | Điều chỉnh ca đã kết | Có, phải ghi lý do | Không |
 | Tài khoản, phân ca, khóa quyền, đổi vai trò | Có; không khóa/hạ quyền chủ quán | Không |
 | Xuất đơn/báo cáo, nhật ký | JSON dữ liệu, CSV báo cáo; 500 nhật ký gần nhất | Không |
@@ -105,3 +105,7 @@ Playwright chạy trên desktop 1440px và điện thoại 390px, dùng API/auth
 ## QR chuyển khoản
 
 `public/payment-qr.svg` là QR minh họa, không phải mã chuyển tiền ngân hàng. Thay file đó bằng QR thật hoặc đổi `PAYMENT_QR` trong `src/main.js` để dùng PNG/JPG; sau khi kiểm tra mã thật, cập nhật nhãn và hướng dẫn trong `.transfer-panel`. QR tĩnh không tự nhúng tiền/nội dung từng đơn. Không có tích hợp ngân hàng/đối soát tự động; nhân viên phải xác nhận tiền đã nhận.
+
+### Mở và đóng ca (migration 003)
+
+Chạy toàn bộ `supabase/migrations/202610180003_staff_shift_sessions.sql` sau migration 002. Chỉ nhân viên được phân công mới được mở và đóng ca; admin xem báo cáo, phân ca và điều chỉnh báo cáo đã kết. Ca có ba trạng thái: chưa mở, đang mở, đã đóng. Phải mở ca trước khi tạo đơn mới; ca đã đóng không mở lại. Database kiểm tra quyền độc lập với giao diện, lưu người và thời điểm mở/đóng ca. Các báo cáo đã kết trước migration vẫn được giữ nguyên.

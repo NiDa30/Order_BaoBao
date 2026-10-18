@@ -3,14 +3,14 @@ import {test,expect} from '@playwright/test';
 const nav=(page,name)=>page.getByRole('button',{name,exact:true}).filter({visible:true}).first();
 async function newOrder(page){await page.getByRole('button',{name:'＋ Tạo đơn mới',exact:true}).click();}
 async function addCoffee(page){await page.getByRole('button',{name:/Cà phê Cà phê sữa/}).click();}
-test.beforeEach(async({page,context})=>{await mock(context,{workspace:null});await login(page);});
+test.beforeEach(async({page,context},info)=>{const server={workspace:null};await mock(context,server);if(/shift close|after closing/.test(info.title)){server.workspace={revision:0,data:{menu:[{id:'coffee',name:'Cà phê sữa',category:'Cà phê',price:22000}],orders:[],closings:[]}};server.access.role='staff';const day=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Ho_Chi_Minh',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());server.access.assignments=[1,2,3].map(shift=>({day,shift,user_id:server.access.userId}));}await login(page);});
 test('order, quantities, payment, persistence and shift close',async({page})=>{
  await newOrder(page);await addCoffee(page);await page.getByRole('button',{name:'Tăng Cà phê sữa'}).click();
  await expect(page.locator('#cart-total')).toContainText('44.000');await page.getByRole('button',{name:'15',exact:true}).click();await page.locator('#customer-input').fill('Chị Linh');
  await page.getByRole('button',{name:'Lưu đơn hàng'}).click();await expect(page.locator('.order-card')).toContainText('Chị Linh');await page.reload();await expect(page.locator('.order-card')).toContainText('44.000');
- await page.getByRole('button',{name:'◴ Kết ca',exact:true}).click();await page.getByRole('button',{name:'Kết ca 1 ↗'}).click();await expect(page.locator('.warning')).toContainText('1 đơn chưa thanh toán');
+ await page.getByRole('button',{name:'◴ Mở / đóng ca',exact:true}).click();await page.getByRole('button',{name:'Kết ca 1 ↗'}).click();await expect(page.locator('.warning')).toContainText('1 đơn chưa thanh toán');
  await page.getByRole('button',{name:'Xem đơn chưa thanh toán'}).click();await page.locator('.order-card').click();await page.getByRole('button',{name:'✓ Xác nhận đã thanh toán'}).click();await expect(page.locator('.stat').first()).toContainText('44.000');
- await page.getByRole('button',{name:'◴ Kết ca',exact:true}).click();await page.getByRole('button',{name:'Kết ca 1 ↗'}).click();await page.getByRole('button',{name:'Xác nhận kết ca'}).click();await expect(page.locator('.shift-card').first()).toContainText('Đã kết ca');await page.reload();await page.getByRole('button',{name:'◴ Kết ca',exact:true}).click();await expect(page.locator('.shift-card').first()).toContainText('44.000');
+ await page.getByRole('button',{name:'◴ Mở / đóng ca',exact:true}).click();await page.getByRole('button',{name:'Kết ca 1 ↗'}).click();await page.getByRole('button',{name:'Xác nhận kết ca'}).click();await expect(page.locator('.shift-card').first()).toContainText('Đã kết ca');await page.reload();await page.getByRole('button',{name:'◴ Mở / đóng ca',exact:true}).click();await expect(page.locator('.shift-card').first()).toContainText('44.000');
 });
 test('search, custom menu item, custom order label and history',async({page})=>{
  await newOrder(page);await page.getByLabel('Tìm món cho đơn').fill('Mon moi');await expect(page.locator('.mini-empty')).toBeVisible();await page.getByRole('button',{name:'＋ Thêm món & giá'}).click();await page.locator('[name=name]').fill('Trà đặc biệt');await page.locator('[name=price]').fill('42000');await page.getByRole('button',{name:'Thêm vào thực đơn',exact:true}).click();
@@ -37,7 +37,7 @@ test('edit from history updates existing order and persists without duplicating'
 
 test('editing a paid order after closing reconciles revenue and retains payment metadata',async({page})=>{
  await newOrder(page);await addCoffee(page);await page.getByRole('button',{name:'Lưu đơn hàng',exact:false}).click();await page.locator('.order-card').click();await page.getByRole('button',{name:'✓ Xác nhận đã thanh toán'}).click();
- await page.getByRole('button',{name:'◴ Kết ca',exact:true}).click();await page.getByRole('button',{name:'Kết ca 1 ↗'}).click();await page.getByRole('button',{name:'Xác nhận kết ca'}).click();
+ await page.getByRole('button',{name:'◴ Mở / đóng ca',exact:true}).click();await page.getByRole('button',{name:'Kết ca 1 ↗'}).click();await page.getByRole('button',{name:'Xác nhận kết ca'}).click();
  const before=await page.evaluate(()=>JSON.parse(localStorage.getItem(Object.keys(localStorage).find(k=>k.startsWith('lam-an-cloud-v2:')&&!k.includes(':backup:')))).local);
  await page.locator('[data-page=history]:visible').click();await page.locator('.history-row').click();await page.getByRole('button',{name:'✎ Sửa đơn',exact:true}).click();await page.getByRole('button',{name:'Tăng Cà phê sữa',exact:true}).click();await page.locator('#edit-reason').fill('Khách gọi thêm món');await page.locator('#settlement-confirmed').check();await page.getByRole('button',{name:'Lưu thay đổi',exact:false}).click();
  await expect(page.locator('.small-dialog')).toContainText('Đã thanh toán');await expect(page.locator('.small-dialog')).toContainText('44.000');await page.getByRole('button',{name:'Đóng',exact:true}).click();await expect(page.locator('.history-row')).toContainText('44.000');
