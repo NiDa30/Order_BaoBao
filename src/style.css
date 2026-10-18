@@ -25,3 +25,10 @@
 .payment-qr{display:block;width:190px;height:190px;max-width:100%;background:white;margin:16px 0 13px;padding:8px;border:1px solid var(--line);border-radius:6px}
 .transfer-panel>b{font-size:23px;color:var(--green)}.transfer-panel p{font-size:10px;margin:10px 0;line-height:1.8;overflow-wrap:anywhere}.transfer-panel small{font-size:9px;color:#9b895f;line-height:1.9}
 .payment-receipt{padding:14px 12px;border-radius:7px;background:#edf3e7;display:flex;justify-content:space-between;gap:12px;font-size:10px;margin-top:7px}.payment-receipt span{color:#849777}.payment-receipt strong{color:var(--green);text-align:right}
+button.saved{background:transparent;display:inline-flex;align-items:center;gap:3px;padding:8px 0;border:0}
+button.sidebar-bottom{background:#fffefa;text-align:left;width:100%;color:inherit;min-height:58px}
+.cloud-warning .local-dot,.cloud-warning.saved i{background:#c59b4f}
+.cloud-summary{background:#eef3e8;border-radius:9px;padding:17px;display:flex;gap:13px;align-items:flex-start}
+.cloud-summary h3{font-size:13px}.cloud-summary p{font-size:10px;color:#7d8f70;line-height:1.9;margin-top:7px;overflow-wrap:anywhere}.cloud-symbol{font-size:28px;color:#70916a}
+.cloud-account{font-size:12px;font-weight:600;margin:20px 0 0;overflow-wrap:anywhere}
+.cloud-dialog>.full{margin-top:11px}.cloud-dialog .cloud-import{border:1px dashed #cad4bf;border-radius:8px;padding:15px;margin:20px 0}.cloud-import h3{font-size:12px}.cloud-import p{font-size:10px;color:#8a977c;line-height:1.9;margin:9px 0 13px}.form-error{color:#ab5943;font-size:11px;line-height:1.8}.primary:disabled{opacity:.6;cursor:wait}
