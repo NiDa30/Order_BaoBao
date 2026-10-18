@@ -50,3 +50,19 @@ test('cancel and invalid edits preserve saved order',async({page})=>{
  await expect(page.locator('.small-dialog')).toContainText('22.000');await page.getByRole('button',{name:'✎ Sửa đơn',exact:true}).click();await page.locator('#customer-input').fill('Không lưu');page.once('dialog',d=>d.accept());await page.getByRole('button',{name:'Đóng',exact:true}).click();await expect(page.locator('.small-dialog')).not.toContainText('Không lưu');
  const order=await page.evaluate(()=>JSON.parse(localStorage.getItem('lam-an-pos-v1')).orders[0]);expect(order.customer).toBe('');expect(order.revisions).toBeUndefined();expect(order.items[0].price).toBe(22000);expect(order.items[0].qty).toBe(1);
 });
+
+test('cash payment is selected explicitly and persisted in history',async({page})=>{
+ await newOrder(page);await addCoffee(page);await page.getByRole('button',{name:'Lưu đơn hàng',exact:false}).click();await page.locator('.order-card').click();
+ await expect(page.getByRole('button',{name:/Tiền mặt/})).toHaveAttribute('aria-pressed','true');await expect(page.locator('.payment-qr')).toHaveCount(0);await page.getByRole('button',{name:'✓ Xác nhận đã thanh toán'}).click();
+ await page.reload();await page.locator('[data-page=history]:visible').click();await expect(page.locator('.history-row')).toContainText('Tiền mặt');await page.locator('.history-row').click();await expect(page.locator('.payment-receipt')).toContainText('Tiền mặt');
+ const order=await page.evaluate(()=>JSON.parse(localStorage.getItem('lam-an-pos-v1')).orders[0]);expect(order.paymentMethod).toBe('cash');expect(order.status).toBe('paid');expect(order.paidAt).toBeTruthy();
+});
+
+test('transfer QR is a demo and payment requires manual confirmation',async({page})=>{
+ await newOrder(page);await addCoffee(page);await page.getByRole('button',{name:'Lưu đơn hàng',exact:false}).click();await page.locator('.order-card').click();await page.getByRole('button',{name:/Chuyển khoản/}).click();
+ await expect(page.locator('.transfer-panel')).toContainText('QR MẪU');await expect(page.locator('.transfer-panel')).toContainText('22.000');await expect(page.locator('.transfer-panel')).toContainText('LAM AN');await page.locator('.payment-qr').evaluate(img=>img.decode());
+ expect(await page.evaluate(()=>JSON.parse(localStorage.getItem('lam-an-pos-v1')).orders[0].status)).toBe('open');await page.getByRole('button',{name:'Đóng',exact:true}).click();await page.reload();await expect(page.locator('.order-card')).toContainText('Đang phục vụ');await page.locator('.order-card').click();await page.getByRole('button',{name:/Chuyển khoản/}).click();await page.getByRole('button',{name:'✓ Xác nhận đã thanh toán'}).click();
+ await page.reload();await page.locator('[data-page=history]:visible').click();await expect(page.locator('.history-row')).toContainText('Chuyển khoản');await page.locator('.history-row').click();await expect(page.locator('.payment-receipt')).toContainText('Chuyển khoản');
+ const order=await page.evaluate(()=>JSON.parse(localStorage.getItem('lam-an-pos-v1')).orders[0]);expect(order.paymentMethod).toBe('transfer');expect(order.status).toBe('paid');
+ await page.getByRole('button',{name:'✎ Sửa đơn',exact:true}).click();await page.getByRole('button',{name:'Tăng Cà phê sữa',exact:true}).click();await page.getByRole('button',{name:'Lưu thay đổi',exact:false}).click();await expect(page.locator('.payment-receipt')).toContainText('Chuyển khoản');
+});
