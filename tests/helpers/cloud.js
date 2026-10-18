@@ -28,7 +28,7 @@ export async function mock(context,server){
   if(path==='/rest/v1/rpc/pos_list_audit')return reply(server.audit||[]);
   if(path==='/rest/v1/rpc/pos_manage'){
    const {action,payload}=request.postDataJSON();server.calls??=[];server.calls.push({action,payload});
-   if(action==='shift.open'){server.access.shiftSessions=server.access.shiftSessions.filter(s=>s.day!==payload.day||s.shift!==payload.shift);server.access.shiftSessions.push({...payload,status:'open',opened_by:user.id,opened_by_email:user.email});}
+   if(action==='shift.open'){server.access.assignments.push({day:payload.day,shift:payload.shift,user_id:user.id});server.access.shiftSessions=server.access.shiftSessions.filter(s=>s.day!==payload.day||s.shift!==payload.shift);server.access.shiftSessions.push({...payload,status:'open',opened_by:user.id,opened_by_email:user.email});}
    if(action==='member.add')server.access.members.push({user_id:'staff-new',email:payload.email,display_name:payload.name,role:payload.role,active:true});
    if(action==='member.update'){const m=server.access.members.find(m=>m.user_id===payload.userId);Object.assign(m,payload);}
    if(action==='assignment.set'){

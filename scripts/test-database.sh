@@ -36,3 +36,7 @@ for attempt in 1 2; do
  docker exec -i "$container_name" psql -U postgres -v ON_ERROR_STOP=1 < supabase/migrations/202610180003_staff_shift_sessions.sql
 done
 docker exec -i "$container_name" psql -U postgres -v ON_ERROR_STOP=1 < supabase/tests/shift_sessions.sql
+for attempt in 1 2; do
+ docker exec -i "$container_name" psql -U postgres -v ON_ERROR_STOP=1 < supabase/migrations/202610180004_self_service_shifts.sql
+done
+docker exec -i "$container_name" psql -U postgres -v ON_ERROR_STOP=1 < supabase/tests/self_service_shifts.sql

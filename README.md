@@ -109,3 +109,7 @@ Playwright chạy trên desktop 1440px và điện thoại 390px, dùng API/auth
 ### Mở và đóng ca (migration 003)
 
 Chạy toàn bộ `supabase/migrations/202610180003_staff_shift_sessions.sql` sau migration 002. Chỉ nhân viên được phân công mới được mở và đóng ca; admin xem báo cáo, phân ca và điều chỉnh báo cáo đã kết. Ca có ba trạng thái: chưa mở, đang mở, đã đóng. Phải mở ca trước khi tạo đơn mới; ca đã đóng không mở lại. Database kiểm tra quyền độc lập với giao diện, lưu người và thời điểm mở/đóng ca. Các báo cáo đã kết trước migration vẫn được giữ nguyên.
+
+### Tạm tắt phân ca thủ công (migration 004)
+
+Sau migration 003, chạy `supabase/migrations/202610180004_self_service_shifts.sql`. Admin không còn form phân/gỡ ca; API phân ca thủ công cũng bị chặn. Nhân viên tự mở ca 1–3 trong ngày hiện tại (giờ Việt Nam); hệ thống tự ghi nhận tham gia để giới hạn quyền xem doanh thu/thao tác đúng ca. Quyền và dữ liệu ca cũ được giữ nguyên. Chỉ nhân viên đóng ca; ca đã đóng không mở lại. Mở ca cần kết nối mạng để xác nhận quyền và trạng thái.
