@@ -1,73 +1,94 @@
 # Lam An POS
 
-Ứng dụng tính tiền cho quán cà phê, giao diện tiếng Việt, responsive từ điện thoại đến desktop. Vite + JavaScript. Đăng nhập Supabase bằng email/password trước khi vào POS; dữ liệu được cache trên máy và đồng bộ theo tài khoản.
+Web tính tiền tiếng Việt cho quán cà phê, responsive điện thoại/desktop. Đăng nhập Supabase bắt buộc; admin và nhân viên cùng một quán dùng chung menu, đơn và báo cáo ca. Dữ liệu được cache trên máy, đồng bộ qua RPC có transaction và kiểm tra quyền.
 
 ## Chạy dự án
 
-Yêu cầu Node.js 20.19+ hoặc 22.12+.
+Node.js 20.19+ hoặc 22.12+:
 
 ```sh
 npm ci --cache /tmp/npm-cache
 npm run dev
+npm run build
 ```
 
-`npm run build` tạo bản production trong `dist`. `npm run preview` chạy thử bản build.
+`npm run preview` chạy thử `dist`. Copy `.env.example` thành `.env.local`, điền `VITE_SUPABASE_URL` và `VITE_SUPABASE_PUBLISHABLE_KEY` (hoặc legacy `VITE_SUPABASE_ANON_KEY`). Trên Vercel đặt các biến trong Environment Variables rồi redeploy. Đây là cấu hình public frontend; không dùng service_role/secret key hoặc mật khẩu Postgres trong biến `VITE_...`.
 
-## Quy trình bán hàng
+## Nâng cấp từ bản mỗi tài khoản một workspace
 
-1. Đăng nhập, rồi chọn một trong 3 ca tại Quầy bán hàng.
-2. Tạo đơn, chọn số bàn 1–15 hoặc nhập số/tên tùy ý; có thể điền tên khách.
-3. Tìm món không dấu hoặc có dấu, chọn món và điều chỉnh số lượng. Không có món thì chọn **Thêm món**, nhập tên và giá.
-4. Lưu đơn; mở đơn từ danh sách, chọn **Tiền mặt** hoặc **Chuyển khoản** và xác nhận đã thanh toán sau khi nhận tiền. Phương thức được lưu cùng đơn và hiển thị trong lịch sử.
-5. Vào Quản lý ca để kết ca. Cần thanh toán tất cả đơn trước khi kết. Ca đã kết không nhận đơn mới trong ngày.
-6. Lịch sử tìm theo số đơn, tên khách hoặc món; lọc ngày và ca. Có thể xuất toàn bộ dữ liệu JSON để lưu trữ. Mở chi tiết rồi chọn **Sửa đơn** để sửa bàn/tên khách, món, số lượng, đơn giá và ghi chú; chọn **Lưu thay đổi** để cập nhật hoặc đóng để hủy.
+1. Trước khi cập nhật, để mọi thiết bị hoàn tất đồng bộ và xuất bản sao dữ liệu cần giữ. Tránh bán hàng trong khoảng chuyển đổi schema.
+2. Trong Supabase **SQL Editor**, chạy **toàn bộ** `supabase/migrations/202610180002_shop_roles.sql`. Không chọn riêng khối DECLARE. File chạy lại được và giữ nguyên bảng `pos_workspaces` cũ như bản lưu trữ; không xóa dữ liệu.
+3. Tài khoản chủ quán phải có sẵn trong Authentication → Users. Chạy riêng trong SQL Editor:
 
-Ngày kinh doanh tính theo múi giờ Việt Nam. Các ca được chọn thủ công, không giới hạn khung giờ. Báo cáo ngày tổng hợp 3 ca; doanh thu chỉ tính đơn đã thanh toán. Giá trong đơn là giá tại thời điểm tạo, không đổi theo chỉnh sửa menu. Sửa đơn giữ nguyên mã đơn, ngày, ca và trạng thái thanh toán; đơn cũ được lưu trong lịch sử chỉnh sửa của dữ liệu xuất. Nếu sửa đơn thuộc ca đã kết, doanh thu ca được tính lại, giữ doanh thu gốc và đánh dấu đã điều chỉnh. Việc sửa tổng tiền của đơn đã thanh toán không tự thực hiện thu thêm hoặc hoàn tiền ngoài thực tế.
+```sql
+select public.pos_bootstrap_shop('EMAIL_ADMIN_CUA_BAN');
+```
 
-## Dữ liệu
+Hàm này chỉ chạy được bởi quản trị database, không cấp quyền gọi cho anon/authenticated. Nó tạo quán và admin, copy nguyên dữ liệu cloud từ workspace cũ của tài khoản admin. Không tự gộp workspace riêng của các tài khoản khác; các bản đó vẫn còn trong bảng cũ để đối chiếu. Không tự chọn tài khoản đăng nhập đầu tiên làm admin.
 
-Menu, đơn hàng và báo cáo kết ca được lưu local sau mỗi thao tác xác nhận. Chưa đăng nhập: chỉ hiện màn hình đăng nhập, không cho xem/tạo đơn, thực đơn hoặc báo cáo. Dữ liệu cũ trong `lam-an-pos-v1` được giữ riêng để nhập sau. Đã đăng nhập: dữ liệu được giữ trong cache riêng theo project + tài khoản và đồng bộ lên Supabase. Chỉ trạng thái **Đã đồng bộ** mới xác nhận bản hiện tại đã lưu lên database. Thay đổi chưa đồng bộ sẽ mất nếu xóa dữ liệu trình duyệt. Nên xuất dữ liệu thường xuyên. Đơn đang soạn chưa bấm lưu là bản nháp tạm thời. Không có dữ liệu bán hàng giả. Menu khởi tạo theo ảnh người dùng cung cấp; mục ép ổi bị che giá/tên trong ảnh không được tự suy đoán.
+4. Deploy frontend mới. Đăng nhập bằng admin, vào **Nhân viên**, thêm email nhân viên có sẵn và phân ca theo ngày. Mỗi tài khoản hiện thuộc tối đa một quán. Nếu chưa có membership hoặc bị khóa, ứng dụng chặn dashboard.
+5. Chọn tài khoản mới trong POS cần triển khai Edge Function ở phần tiếp theo. Nếu chưa deploy function, admin vẫn có thể tạo Auth user trong Supabase rồi dùng **Thêm email đã có tài khoản**.
+
+Không chạy lại migration `001` sau `002`, vì `002` thay thế RPC cũ. Dự án mới hoàn toàn: chạy `001`, tiếp theo `002`, rồi bootstrap admin.
+
+Cache mới dùng `lam-an-cloud-v2:<project>:<user-id>` và giữ bản dữ liệu/access theo tài khoản. Cache `v1` và local `lam-an-pos-v1` được giữ nguyên. Nếu v1 còn thay đổi chưa đồng bộ, admin có nút **Xuất bản sao dữ liệu cũ trên máy** để đối chiếu. Chỉ nhập tự động vào quán chưa có đơn, báo cáo và chưa sửa menu; không tự ghi đè dữ liệu quán đang hoạt động.
+
+## Tạo tài khoản mới từ POS
+
+Triển khai function `supabase/functions/pos-create-member/index.ts` tới đúng dự án Supabase. Với Supabase CLI đã đăng nhập:
+
+```sh
+supabase link --project-ref YOUR_PROJECT_REF
+supabase functions deploy pos-create-member
+```
+
+`supabase/config.toml` đặt `verify_jwt=false` ở gateway để hỗ trợ signing keys mới. **Handler tự xác minh JWT bằng `auth.getUser()` và kiểm tra membership admin đang hoạt động trong database trước khi dùng service role.** Không bỏ các kiểm tra trong handler. Có thể deploy cùng nội dung bằng Supabase Dashboard → Edge Functions → editor và cấu hình gateway tương ứng.
+
+Supabase tự cung cấp các biến server `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` cho function. Không đưa service role vào frontend. Admin nhập email, họ tên, mật khẩu tạm ít nhất 8 ký tự và vai trò. Function tạo Auth user rồi thêm membership qua RPC; không log/lưu mật khẩu vào bảng audit. Nhân viên đổi mật khẩu tại phần tài khoản/đồng bộ sau khi đăng nhập. Nếu Auth user tạo được nhưng gắn membership lỗi, dùng **Thêm email đã có tài khoản** để thử lại, không tự xóa Auth user.
+
+## Quyền và nghiệp vụ
+
+| Chức năng | Admin | Nhân viên |
+|---|---|---|
+| Menu, tạo/sửa đơn chưa thu, xác nhận tiền mặt/chuyển khoản | Tất cả ca | Ca được phân công theo ngày |
+| Sửa đơn đã thanh toán | Tất cả đơn | Đơn thuộc ca được phân công, không chờ duyệt |
+| Hủy đơn | Cả đơn chưa/đã thu | Chỉ đơn chưa thu trong ca được phân công |
+| Thay đổi menu, đổi giá | Cập nhật trực tiếp; duyệt đề xuất | Gửi đề xuất, không trực tiếp đổi menu chung |
+| Doanh thu | Ngày, tuần (thứ Hai–Chủ nhật), tháng, lọc ca | Chỉ ca được phân công |
+| Kết ca | Mọi ca | Ca được phân công |
+| Điều chỉnh ca đã kết | Có, phải ghi lý do | Không |
+| Tài khoản, phân ca, khóa quyền, đổi vai trò | Có; không khóa/hạ quyền chủ quán | Không |
+| Xuất đơn/báo cáo, nhật ký | JSON dữ liệu, CSV báo cáo; 500 nhật ký gần nhất | Không |
+
+- Mỗi ngày theo múi giờ Việt Nam có 3 ca được chọn thủ công. Mã đơn có UUID suffix để tránh trùng khi nhiều máy tạo offline; bàn 1–15, tên/số tùy ý hoặc tên khách đều được hỗ trợ.
+- Sửa đơn đã thanh toán bắt buộc lý do. Khi đổi tổng tiền phải xác nhận đã thu thêm/hoàn chênh lệch và chọn tiền mặt/chuyển khoản. Giá đơn cũ không thay đổi theo giá menu mới. Không tự thực hiện giao dịch ngân hàng.
+- Database gắn tài khoản tạo/sửa/thu/hủy, thời gian và revision trước sửa; client không thể giả mạo actor. Nhật ký lưu before/after bất biến qua các RPC, không có API xóa nhật ký/đơn/ca.
+- Hủy đơn giữ lịch sử và loại khỏi doanh thu. Hủy đơn đã thu chỉ admin, bắt buộc lý do và xác nhận đã hoàn đủ theo phương thức đã thu.
+- Kết ca cần giải quyết hết đơn mở, nhập tiền mặt thực đếm và ghi chú nếu lệch. Báo cáo ghi tiền hệ thống, thực đếm, chênh lệch và người kết. Đơn hủy không tính doanh thu. Đơn cũ chưa có đối chiếu hiển thị “Chưa đối chiếu”.
+- Ca đã kết không nhận đơn mới. Sửa đơn đã thu trong ca đó tự cập nhật báo cáo và giữ gốc; đây khác với khoản điều chỉnh ca thủ công chỉ admin được ghi. Điều chỉnh có số tiền dương/âm, phương thức và lý do, được tính vào doanh thu ngày/tuần/tháng.
+- Doanh thu tách dòng tiền mặt/chuyển khoản, bao gồm xử lý chênh lệch sau chỉnh sửa; dữ liệu cũ không có phương thức được hiển thị riêng, không tự suy đoán.
+
+## Dữ liệu và phân quyền
+
+- `pos_shops` giữ JSONB snapshot của quán. `pos_members`, `pos_assignments`, `pos_proposals`, `pos_audit` giữ thành viên, phân ca, đề xuất và nhật ký. Tất cả bật RLS, không cho anon/authenticated trực tiếp đọc/ghi các bảng snapshot. Chỉ các RPC đã xác thực được truy cập; RPC trả dữ liệu nhân viên đã lọc theo ca ngay tại database.
+- Mỗi lần ghi dùng CAS revision và khóa transaction. Đơn độc lập được gộp theo ID; hai thiết bị sửa cùng bản ghi sẽ báo **Cần đối chiếu**, giữ thay đổi local. Chọn bản database cần xác nhận và giữ bản sao local với hậu tố `:backup:<timestamp>`; chưa có UI khôi phục bản sao.
+- Lưu trên máy trước, đồng bộ khi lưu, khi có mạng trở lại và polling mỗi 30 giây khi trang hiển thị. Chỉ **Đã đồng bộ** xác nhận dữ liệu đã lên server. Chức năng quản trị, phân ca, đề xuất menu và đọc nhật ký cần online; không tạo thành công giả khi mất mạng.
+- Thu hồi quyền được áp dụng khi thiết bị nhận cập nhật/online; RPC luôn kiểm tra quyền hiện tại. Cache phục vụ bán hàng offline không thể xóa các bản dữ liệu thiết bị đã từng tải hoặc xuất trước đó. Khi quyền bị thu hồi, UI và server chặn ca không còn quyền; bản pending cũ được giữ để xử lý xung đột, không tự ghi đè.
+- Đồng bộ tất cả thiết bị trước khi kết ca. Đơn offline chưa lên có thể xung đột với ca đã chốt; hệ thống giữ dữ liệu, không tự thêm đơn vào ca đóng.
+- Snapshot phù hợp quán nhỏ, chưa phân trang; lịch sử lớn cần tách bảng/đồng bộ từng bản ghi. Nhật ký UI giới hạn 500 dòng mới nhất, dữ liệu cũ vẫn nằm trong database.
+- Chưa có service worker để mở ứng dụng từ đầu hoàn toàn offline. Xóa dữ liệu trình duyệt sẽ mất phần chưa đồng bộ. Đơn đang soạn chưa bấm lưu là bản nháp tạm thời.
 
 ## Kiểm thử
 
 ```sh
 npm test
+npm run test:db
 ```
 
-Playwright chạy các kịch bản POS trên desktop 1440px và điện thoại 390px: tạo đơn, số lượng/tổng tiền, lưu qua reload, thanh toán, chặn kết ca khi chưa thu tiền, kết ca, thêm/tìm món, tên bàn tùy ý, lịch sử, phân tách 3 ca và kiểm tra tràn màn hình. Bao gồm sửa đơn từ lịch sử, lưu qua reload không tạo bản trùng, giữ metadata thanh toán, cập nhật ca đã kết, hủy sửa và chặn dữ liệu không hợp lệ.
+Playwright chạy trên desktop 1440px và điện thoại 390px, dùng API/auth giả lập và không ghi dữ liệu vào dự án thật. Kiểm tra POS, đăng nhập/đăng xuất, offline/retry, conflict, admin/nhân viên, lý do sửa/thu hoàn tiền, hủy, phân ca, đề xuất menu, đối chiếu tiền, báo cáo và Edge Function auth guards. Server test port 5175 tách dev 5173. Cấu hình dùng Chromium hệ thống hoặc `CHROMIUM_PATH`, nếu không có dùng browser Playwright đã cài.
 
-Cấu hình dùng Chromium hệ thống tại `/usr/bin/chromium` trong môi trường cloud. Có thể đặt biến `CHROMIUM_PATH` cho máy khác, hoặc bỏ biến khi không có Chromium hệ thống để dùng browser do `npx playwright install chromium` cài đặt.
+`test:db` dùng Docker/PostgreSQL 17 tạm, không mở cổng host, chạy migrations hai lần và kiểm tra CAS, tổng tiền, role escalation, lọc ca từ DB, chống giả mạo tài khoản thao tác, khóa tài khoản, paid edit, refund/cancel, đề xuất/duyệt menu, đối chiếu và điều chỉnh ca. Không thay thế kiểm tra trên Supabase thật sau khi áp dụng migration và deploy function.
 
-## QR chuyển khoản mẫu
+## QR chuyển khoản
 
-`public/payment-qr.svg` là QR minh họa chứa văn bản demo, không phải mã chuyển tiền ngân hàng. Chọn chuyển khoản sẽ hiện QR, số tiền của đơn và nội dung chuyển khoản gợi ý. Quét QR không tự đánh dấu thanh toán; nhân viên phải xác nhận đã nhận tiền.
-
-Để dùng mã thật: thay `public/payment-qr.svg` bằng SVG QR ngân hàng thật, hoặc đổi hằng `PAYMENT_QR` trong `src/main.js` để trỏ tới ảnh PNG/JPG mới trong `public`. Sau đó cập nhật nhãn QR mẫu và hướng dẫn trong `.transfer-panel` khi đã kiểm tra mã thật. QR tĩnh không tự nhúng số tiền/nội dung từng đơn; các thông tin bên dưới ảnh là hướng dẫn nhập cho khách. Chưa tích hợp ngân hàng hoặc xác nhận giao dịch tự động.
-
-Đơn cũ chưa có `paymentMethod` hiển thị “Chưa ghi nhận phương thức”, không tự suy đoán là tiền mặt. Sửa đơn đã thanh toán giữ nguyên phương thức đã ghi nhận.
-
-## Kết nối Supabase
-
-1. Chạy toàn bộ `supabase/migrations/202610180001_pos_workspace.sql` trong **SQL Editor** của dự án Supabase. Migration tạo bảng `pos_workspaces`, hai RPC đọc/lưu, RLS và phân quyền. Chạy lại an toàn, không xóa dữ liệu đang có.
-2. Tạo tài khoản bằng **Authentication → Users → Add user** trong Supabase (email + password, xác nhận email theo cấu hình dự án). Không gửi mật khẩu qua chat hoặc ghi vào repo.
-3. Copy `.env.example` thành `.env.local`, điền `VITE_SUPABASE_URL` và `VITE_SUPABASE_PUBLISHABLE_KEY` (hoặc `VITE_SUPABASE_ANON_KEY` cho anon key cũ) từ Settings → API Keys. Không dùng service_role, secret key hoặc mật khẩu Postgres trong frontend. File `.env.local` đã được Git bỏ qua.
-4. Khởi động lại `npm run dev`. Khi deploy, đặt các biến `VITE_...` tương tự trong build environment của nền tảng deploy rồi build lại; Vite đọc cấu hình ở thời điểm build. Việc kết nối tài khoản Supabase trong công cụ khác không tự tạo các biến này trong repo.
-5. Mở ứng dụng sẽ hiện màn hình đăng nhập. Nhập email/password và đợi **Đã đồng bộ** sau khi vào dashboard. Phiên hợp lệ được khôi phục khi reload; đăng xuất quay lại màn hình đăng nhập. Thiếu cấu hình Supabase sẽ chặn truy cập và hiện thông báo liên hệ quản lý, không mở POS local.
-6. Nếu có đơn cũ trên máy, chọn **Nhập dữ liệu cũ vào tài khoản**. Chỉ nhập vào tài khoản chưa có đơn/báo cáo ca và chưa sửa menu, tránh ghi đè. Bản local cũ được giữ nguyên. Nếu tài khoản đã có dữ liệu, xuất JSON để đối chiếu trước, chưa tự động gộp lịch sử cũ.
-7. Trên thiết bị khác, dùng **cùng tài khoản** để xem cùng dữ liệu. Mỗi tài khoản hiện có workspace riêng; chưa có tính năng nhiều tài khoản nhân viên cùng một quán hoặc phân quyền quản lý/thu ngân.
-
-### Đồng bộ và bảo vệ dữ liệu
-
-- Không mở quyền đọc/ghi cho `anon`. Chỉ user đăng nhập đọc được workspace của chính mình; ghi qua RPC có kiểm tra `auth.uid()`.
-- Database lưu JSONB snapshot gồm menu, đơn, chi tiết món, thanh toán, lịch sử chỉnh sửa và kết ca. Đây là thiết kế cho POS nhỏ; chưa phân trang, mỗi lần đồng bộ tải snapshot. Khi lịch sử lớn nên tách bảng và đồng bộ từng bản ghi.
-- Mỗi lần ghi dùng revision và transaction để tránh ghi đè giữa các thiết bị. Các đơn độc lập được gộp theo ID; sửa cùng đơn/món/ca từ hai máy sẽ báo **Cần đối chiếu**, không tự chọn bản cuối.
-- Có cache và hàng đợi thay đổi bền vững trong localStorage; đồng bộ khi lưu, khi mạng trở lại và mỗi 30 giây khi trang đang hiển thị. Chưa có service worker để khởi động ứng dụng hoàn toàn offline khi chưa tải trang/asset. Chưa dùng Supabase Realtime.
-- Trước khi đăng xuất phải đồng bộ hết thay đổi. Đổi tài khoản dùng cache riêng, không tự đưa dữ liệu tài khoản cũ sang tài khoản mới.
-- Nếu xung đột, xuất bản trên máy rồi đối chiếu. Nút **Dùng bản trên database** cần xác nhận và giữ bản sao local trước khi thay. Bản sao nằm ở key cache có hậu tố `:backup:<timestamp>`; chưa có giao diện khôi phục bản sao.
-- Tổng kết ca được database tính lại từ đơn đã thanh toán; chặn thêm đơn vào ca đã kết, kết ca có đơn chưa thanh toán và thay đổi metadata thanh toán đã ghi nhận. Khi có đơn offline chưa lên server, cần đồng bộ tất cả thiết bị trước khi kết ca. Xung đột kết ca sẽ được giữ để xử lý, không làm mất đơn.
-
-### Kiểm thử Supabase
-
-`npm test` chạy POS, màn hình đăng nhập, đăng xuất, khôi phục phiên, merge và browser contract tests trên desktop/mobile. Các browser tests dùng URL/key giả và mock Supabase API, không gửi dữ liệu test lên dự án thật. Test server ở port 5175, tách khỏi dev server 5173.
-
-`npm run test:db` cần Docker, tạo PostgreSQL 17 tạm, mô phỏng role/auth UID của Supabase rồi chạy migration hai lần và kiểm tra: lưu/đọc, CAS, validation, payment, kết ca, tính lại doanh thu, RLS theo owner và từ chối anon. Không thay thế kiểm tra end-to-end trên Supabase thật.
+`public/payment-qr.svg` là QR minh họa, không phải mã chuyển tiền ngân hàng. Thay file đó bằng QR thật hoặc đổi `PAYMENT_QR` trong `src/main.js` để dùng PNG/JPG; sau khi kiểm tra mã thật, cập nhật nhãn và hướng dẫn trong `.transfer-panel`. QR tĩnh không tự nhúng tiền/nội dung từng đơn. Không có tích hợp ngân hàng/đối soát tự động; nhân viên phải xác nhận tiền đã nhận.

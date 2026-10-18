@@ -1,0 +1,3 @@
+[functions.pos-create-member]
+# JWT is verified by auth.getUser() inside the handler, supporting newer signing keys.
+verify_jwt = false

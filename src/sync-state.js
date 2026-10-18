@@ -37,11 +37,12 @@ export function mergeSnapshots(base,local,remote) {
   }
   for(const closing of result.closings) {
     const orders=result.orders.filter(o=>o.day===closing.day&&o.shift===closing.shift);
-    if(orders.some(o=>o.status!=='paid'))throw new SyncConflict('Ca có đơn chưa thanh toán trên thiết bị khác. Chưa thể đồng bộ kết ca.');
-    const revenue=orders.reduce((sum,o)=>sum+o.items.reduce((v,i)=>v+i.price*i.qty,0),0);
-    if(revenue!==closing.revenue||closing.count!==orders.length) {
+    if(orders.some(o=>o.status==='open'))throw new SyncConflict('Ca có đơn chưa thanh toán trên thiết bị khác. Chưa thể đồng bộ kết ca.');
+    const paid=orders.filter(o=>o.status==='paid');
+    const revenue=paid.reduce((sum,o)=>sum+o.items.reduce((v,i)=>v+i.price*i.qty,0),0)+(closing.adjustments||[]).reduce((s,a)=>s+a.amount,0);
+    if(revenue!==closing.revenue||closing.count!==paid.length) {
       closing.originalRevenue??=closing.revenue;
-      closing.revenue=revenue;closing.count=orders.length;
+      closing.revenue=revenue;closing.count=paid.length;
       closing.updatedAt=new Date().toISOString();
     }
   }

@@ -1,3 +1,4 @@
+import {visibleData,isAdmin,canShift} from './permissions.js';
 import {createClient} from '@supabase/supabase-js';
 import {clone,same,isSnapshot,mergeSnapshots,SyncConflict} from './sync-state.js';
 export const LOCAL_KEY='lam-an-pos-v1';
@@ -24,13 +25,20 @@ export function createCloudStore(seed,{onData=()=>{},onStatus=()=>{}}={}) {
   let configError='';
   if(url||key){try{if(!url||!key||new URL(url).protocol!=='https:'||!publicKey(key))throw new Error();}catch{configError='Cấu hình Supabase chưa hợp lệ. Chỉ dùng Project URL HTTPS và publishable/anon public key.';}}
   const client=url&&key&&!configError?createClient(url,key):null;
-  let session=null,scope=null,envelope=null,running=false,again=false,generation=0,authReady=false;
+  let session=null,scope=null,envelope=null,running=false,again=false,generation=0,authReady=false,access=null;
   const status={mode:configError?'config-error':client?'loading':'local',message:configError,email:'',lastSync:null};
   const notify=patch=>{Object.assign(status,patch);onStatus({...status,configured:!!client,pending:!!envelope&&!same(envelope.local,envelope.base)});};
   const writeCache=(value)=>localStorage.setItem(scope||LOCAL_KEY,JSON.stringify(value));
-  const apply=(value)=>{if(same(data,value))return;data=clone(value);onData(clone(data));};
+  const apply=(value)=>{if(same(data,value))return;data=clone(value);onData(clone(visibleData(data,access)));};
   const cache=(next)=>{writeCache(next);envelope=next;apply(next.local);};
   function persist(next) {
+    if(status.mode==='conflict')return {ok:false,message:'Cần đối chiếu dữ liệu xung đột trước khi tiếp tục lưu.'};
+    if(!access)return {ok:false,message:'Tài khoản chưa được phân quyền vào quán.'};
+    if(!isAdmin(access)){
+      if(!same(next.menu,data.menu))return {ok:false,message:'Chỉ admin được thay đổi thực đơn. Hãy gửi đề xuất.'};
+      const changed=next.orders.filter(o=>!same(o,data.orders.find(p=>p.id===o.id)));
+      if(changed.some(o=>!canShift(access,o.day,o.shift)||o.status==='cancelled'&&data.orders.find(p=>p.id===o.id)?.status==='paid'))return {ok:false,message:'Không có quyền thao tác đơn này.'};
+    }
     if(!session)return {ok:false,message:'Vui lòng đăng nhập trước khi sử dụng quầy bán hàng.'};
     if(status.mode==='loading')return {ok:false,message:'Đang tải dữ liệu tài khoản. Vui lòng đợi một chút.'};
     try {
@@ -52,24 +60,28 @@ export function createCloudStore(seed,{onData=()=>{},onStatus=()=>{}}={}) {
         const {data:row,error}=await client.rpc('pos_read_workspace');
         if(error)throw error;
         if(token!==generation)return;
+        if(!row?.access)throw Object.assign(new Error('Missing access'),{code:'42501'});
+        const previousAccess=access;access=row.access;
+        if(!same(previousAccess,access))onData(clone(visibleData(data,access)));
         const remote=row?.data||empty(),revision=row?.revision||0;
         if(!isSnapshot(remote))throw new Error('Invalid remote snapshot');
         const base=clone(envelope.base),local=clone(envelope.local);
         const merged=mergeSnapshots(base,local,remote);
-        if(!row&&!merged.menu.length&&!merged.orders.length&&!merged.closings.length)merged.menu=clone(seed);
+        if(isAdmin(access)&&!merged.menu.length&&!merged.orders.length&&!merged.closings.length)merged.menu=clone(seed);
         let saved={data:remote,revision};
         if(!same(merged,remote)) {
-          const result=await client.rpc('pos_save_workspace',{expected_revision:revision,next_data:merged});
+          const result=await client.rpc('pos_save_workspace',{expected_revision:revision,next_data:visibleData(merged,access)});
           if(token!==generation)return;
           if(result.error?.code==='40001'){if(attempt<3)continue;throw new SyncConflict();}
           if(result.error)throw result.error;
           saved=result.data;
+          if(saved?.access)access=saved.access;
           if(!isSnapshot(saved?.data))throw new Error('Invalid saved snapshot');
         }
         // New local actions may have happened while the request was in flight.
         const latest=readJSON(scope);
         const current=mergeSnapshots(local,latest&&isSnapshot(latest.local)?latest.local:envelope.local,saved.data);
-        cache({base:clone(saved.data),local:current,revision:saved.revision});
+        cache({base:clone(saved.data),local:current,revision:saved.revision,access});
         if(!same(current,saved.data)||again)continue;
         notify({mode:'synced',message:'Menu, đơn hàng và báo cáo ca đã được lưu trên Supabase.',lastSync:new Date().toISOString()});
         return;
@@ -77,6 +89,7 @@ export function createCloudStore(seed,{onData=()=>{},onStatus=()=>{}}={}) {
       notify({mode:'pending',message:'Còn thay đổi đang chờ đồng bộ. Hãy thử lại.'});
     }catch(error){
       if(token!==generation)return;
+      if(error.code==='42501'){access=null;onData(empty());}
       notify({mode:error instanceof SyncConflict?'conflict':'error',message:friendly(error)});
     }finally{running=false;if(token!==generation&&session)void sync();}
   }
@@ -84,12 +97,12 @@ export function createCloudStore(seed,{onData=()=>{},onStatus=()=>{}}={}) {
     if(authReady&&(session?.user.id||null)===(next?.user.id||null)) {session=next;return;}
     authReady=true;generation++;session=next;
     if(!session){
-      scope=null;envelope=null;
+      scope=null;envelope=null;access=null;
       const legacy=readJSON(LOCAL_KEY);apply(isSnapshot(legacy)?legacy:{menu:clone(seed),orders:[],closings:[]});
       notify({mode:client?'login':'local',email:'',lastSync:null,message:client?'Đăng nhập để lưu và dùng dữ liệu trên nhiều thiết bị.':''});return;
     }
-    scope=`lam-an-cloud-v1:${new URL(url).hostname}:${session.user.id}`;
-    const cached=readJSON(scope);
+    scope=`lam-an-cloud-v2:${new URL(url).hostname}:${session.user.id}`;
+    const cached=readJSON(scope);access=cached?.access||null;
     envelope=cached&&isSnapshot(cached.local)&&isSnapshot(cached.base)?cached:{base:empty(),local:{menu:[],orders:[],closings:[]},revision:0};
     apply(envelope.local);notify({mode:'loading',email:session.user.email||'',lastSync:null,message:'Đang tải dữ liệu tài khoản…'});
     // New accounts start with the menu only, never silently upload local sales.
@@ -113,14 +126,14 @@ export function createCloudStore(seed,{onData=()=>{},onStatus=()=>{}}={}) {
     await setSession(auth.session);return {ok:true};
   }
   async function logout() {
-    if(envelope&&!same(envelope.local,envelope.base))return {ok:false,message:'Còn dữ liệu chưa đồng bộ. Hãy đồng bộ hoặc xuất dữ liệu trước khi đăng xuất.'};
+    if(access&&envelope&&!same(envelope.local,envelope.base))return {ok:false,message:'Còn dữ liệu chưa đồng bộ. Hãy đồng bộ hoặc xuất dữ liệu trước khi đăng xuất.'};
     const {error}=await client.auth.signOut({scope:'local'});
     if(error)return {ok:false,message:friendly(error)};
     await setSession(null);return {ok:true};
   }
   function importLocal() {
-    if(!session||!envelope)return {ok:false,message:'Hãy đăng nhập trước khi nhập dữ liệu.'};
-    const local=readJSON(LOCAL_KEY);
+    if(!session||!envelope||!isAdmin(access))return {ok:false,message:'Hãy đăng nhập trước khi nhập dữ liệu.'};
+    const local=legacy();
     if(!isSnapshot(local))return {ok:false,message:'Không có dữ liệu cũ để nhập.'};
     if(data.orders.length||data.closings.length)return {ok:false,message:'Tài khoản đã có dữ liệu bán hàng. Hãy xuất dữ liệu cũ để đối chiếu; không tự ghi đè dữ liệu trên database.'};
     if(!same(data.menu,seed))return {ok:false,message:'Thực đơn tài khoản đã được chỉnh sửa. Hãy xuất dữ liệu cũ để đối chiếu trước khi nhập.'};
@@ -132,10 +145,27 @@ export function createCloudStore(seed,{onData=()=>{},onStatus=()=>{}}={}) {
       const {data:row,error}=await client.rpc('pos_read_workspace');if(error)throw error;
       if(!isSnapshot(row?.data))return {ok:false,message:'Chưa có dữ liệu trên database để tải.'};
       localStorage.setItem(`${scope}:backup:${Date.now()}`,JSON.stringify(envelope));
-      cache({base:clone(row.data),local:clone(row.data),revision:row.revision});
+      access=row.access;cache({base:clone(row.data),local:clone(row.data),revision:row.revision,access});
       notify({mode:'synced',message:'Đã lấy bản trên database. Bản trên máy trước đó được giữ trong bản sao cục bộ.',lastSync:new Date().toISOString()});return {ok:true};
     }catch(error){return {ok:false,message:friendly(error)};}
   }
+  function legacy(){
+    if(session){const old=readJSON(`lam-an-cloud-v1:${new URL(url).hostname}:${session.user.id}`);if(old&&isSnapshot(old.local)&&isSnapshot(old.base)&&!same(old.local,old.base))return old.local;}
+    return readJSON(LOCAL_KEY);
+  }
+  async function manage(action,payload){
+    if(!session||!access)return {ok:false,message:'Tài khoản chưa được phân quyền.'};
+    if(!same(envelope.local,envelope.base))return {ok:false,message:'Hãy đồng bộ hết dữ liệu trước khi thực hiện quản trị.'};
+    try{const {data:row,error}=await client.rpc('pos_manage',{action,payload});if(error)throw error;access=row.access;cache({base:clone(row.data),local:clone(row.data),revision:row.revision,access});notify({mode:'synced',message:'Đã lưu thay đổi quản trị.',lastSync:new Date().toISOString()});return {ok:true};}catch(error){return {ok:false,message:error.message||friendly(error)};}
+  }
+  async function audit(){const {data,error}=await client.rpc('pos_list_audit');return error?{ok:false,message:friendly(error)}:{ok:true,data};}
+  async function createMember(payload){
+    if(!isAdmin(access))return {ok:false,message:'Chỉ admin được tạo tài khoản.'};
+    const {data,error}=await client.functions.invoke('pos-create-member',{body:payload});
+    if(error)return {ok:false,message:'Chưa tạo được tài khoản. Kiểm tra Edge Function pos-create-member đã triển khai, hoặc thêm email có sẵn.'};
+    if(data?.error)return {ok:false,message:data.error};await sync();return {ok:true};
+  }
+  async function changePassword(password){const {error}=await client.auth.updateUser({password});return error?{ok:false,message:friendly(error)}:{ok:true};}
   // Polling also recovers missed changes; realtime is not required for correctness.
   const interval=setInterval(()=>{if(session&&status.mode!=='conflict'&&document.visibilityState==='visible')void sync();},30000);
   window.addEventListener('online',()=>void sync());
@@ -143,7 +173,7 @@ export function createCloudStore(seed,{onData=()=>{},onStatus=()=>{}}={}) {
     if(!scope&&event.key===LOCAL_KEY){const latest=readJSON(LOCAL_KEY);if(isSnapshot(latest))apply(latest);return;}
     if(!scope||event.key!==scope)return;
     const latest=readJSON(scope);
-    if(latest&&isSnapshot(latest.base)&&isSnapshot(latest.local)){envelope=latest;apply(latest.local);notify({mode:same(latest.local,latest.base)?'synced':'pending',message:same(latest.local,latest.base)?'Đã nhận dữ liệu từ tab khác.':'Đã nhận thay đổi đang chờ đồng bộ từ tab khác.'});}
+    if(latest&&isSnapshot(latest.base)&&isSnapshot(latest.local)){envelope=latest;access=latest.access||access;apply(latest.local);notify({mode:same(latest.local,latest.base)?'synced':'pending',message:same(latest.local,latest.base)?'Đã nhận dữ liệu từ tab khác.':'Đã nhận thay đổi đang chờ đồng bộ từ tab khác.'});}
   });
-  return {read:()=>clone(data),persist,start,login,logout,sync,importLocal,useRemote,status:()=>({...status,configured:!!client,authReady}),legacy:()=>readJSON(LOCAL_KEY),hasSession:()=>!!session,destroy:()=>{clearInterval(interval);client?.auth.stopAutoRefresh();}};
+  return {read:()=>clone(visibleData(data,access)),persist,start,login,logout,sync,importLocal,useRemote,manage,audit,createMember,changePassword,status:()=>({...status,configured:!!client,authReady,access}),legacy,hasSession:()=>!!session,destroy:()=>{clearInterval(interval);client?.auth.stopAutoRefresh();}};
 }

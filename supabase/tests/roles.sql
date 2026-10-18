@@ -34,6 +34,11 @@ do $$ declare row jsonb; s jsonb; o jsonb; r bigint; begin
  s:=jsonb_set(s,'{orders,0}',s#>'{orders,0}'||'{"editReason":"Khách gọi thêm","settlement":{"kind":"collect","method":"cash","amount":22000,"confirmed":true}}'::jsonb);
  row:=public.pos_save_workspace((row->>'revision')::bigint,s);
  if row#>>'{data,orders,0,updatedByEmail}'<>'staff@example.test' then raise exception 'Missing paid editor';end if;
+ s:=jsonb_set(row->'data','{orders,0,items,0,qty}','3');
+ s:=jsonb_set(s,'{orders,0}',s#>'{orders,0}'||'{"editReason":"Thu thêm chuyển khoản","settlement":{"kind":"collect","method":"transfer","amount":22000,"confirmed":true}}'::jsonb);
+ row:=public.pos_save_workspace((row->>'revision')::bigint,s);
+ if row#>>'{data,orders,0,paymentTotals,cash}'<>'44000' or row#>>'{data,orders,0,paymentTotals,transfer}'<>'22000' then raise exception 'Mixed-method settlement was not reconciled';end if;
+
  s:=jsonb_set(row->'data','{orders,0}',row#>'{data,orders,0}'||'{"status":"cancelled","cancelReason":"test cancel","refundConfirmed":true}'::jsonb);
  begin perform public.pos_save_workspace((row->>'revision')::bigint,s);raise exception 'Staff cancelled paid order';exception when insufficient_privilege then null;end;
  o:=o||'{"id":"staff-cancel","code":"staff-cancel"}'::jsonb;
@@ -43,7 +48,7 @@ do $$ declare row jsonb; s jsonb; o jsonb; r bigint; begin
  if row#>>'{data,orders,1,cancelledByEmail}'<>'staff@example.test' then raise exception 'Staff cancel not attributed';end if;
  s:=jsonb_set(row->'data','{closings}','[{"day":"2026-10-18","shift":1,"at":"2026-10-18T02:00:00Z","actualCash":43000,"note":"Thiếu một nghìn","revenue":0,"count":0}]');
  row:=public.pos_save_workspace((row->>'revision')::bigint,s);
- if row#>>'{data,closings,0,revenue}'<>'44000' or row#>>'{data,closings,0,discrepancy}'<>'-1000' then raise exception 'Bad close totals';end if;
+ if row#>>'{data,closings,0,revenue}'<>'66000' or row#>>'{data,closings,0,discrepancy}'<>'-1000' then raise exception 'Bad close totals';end if;
  begin perform public.pos_save_workspace((row->>'revision')::bigint,jsonb_set(row->'data','{closings,0,actualCash}','99999'));raise exception 'Staff changed counted cash after close';exception when insufficient_privilege then null;end;
  row:=public.pos_manage('proposal.submit','{"item":{"id":"m1","name":"Cà phê sữa","category":"Cà phê","price":25000},"reason":"Cập nhật giá mới"}');
  if row#>>'{data,menu,0,price}'<>'22000' then raise exception 'Proposal changed live price before approval';end if;
@@ -52,7 +57,7 @@ set local request.jwt.claim.sub='11111111-1111-4111-8111-111111111111';
 do $$ declare row jsonb; begin
  row:=public.pos_read_workspace();if jsonb_array_length(row#>'{data,orders}')<>3 then raise exception 'Private shift lost during staff write';end if;
  row:=public.pos_manage('shift.adjust','{"day":"2026-10-18","shift":1,"amount":-1000,"method":"cash","reason":"Đối chiếu thiếu tiền"}');
- if row#>>'{data,closings,0,revenue}'<>'43000' then raise exception 'Adjustment failed';end if;
+ if row#>>'{data,closings,0,revenue}'<>'65000' then raise exception 'Adjustment failed';end if;
  if jsonb_array_length(public.pos_list_audit())<6 then raise exception 'Missing audit records';end if;
  row:=public.pos_manage('proposal.review',jsonb_build_object('id',row#>>'{access,proposals,0,id}','decision','approved'));
  if row#>>'{data,menu,0,price}'<>'25000' then raise exception 'Approved proposal not applied';end if;
