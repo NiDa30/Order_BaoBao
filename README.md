@@ -20,9 +20,9 @@ npm run dev
 3. Tìm món không dấu hoặc có dấu, chọn món và điều chỉnh số lượng. Không có món thì chọn **Thêm món**, nhập tên và giá.
 4. Lưu đơn; mở đơn từ danh sách và xác nhận đã thanh toán.
 5. Vào Quản lý ca để kết ca. Cần thanh toán tất cả đơn trước khi kết. Ca đã kết không nhận đơn mới trong ngày.
-6. Lịch sử tìm theo số đơn, tên khách hoặc món; lọc ngày và ca. Có thể xuất toàn bộ dữ liệu JSON để lưu trữ.
+6. Lịch sử tìm theo số đơn, tên khách hoặc món; lọc ngày và ca. Có thể xuất toàn bộ dữ liệu JSON để lưu trữ. Mở chi tiết rồi chọn **Sửa đơn** để sửa bàn/tên khách, món, số lượng, đơn giá và ghi chú; chọn **Lưu thay đổi** để cập nhật hoặc đóng để hủy.
 
-Ngày kinh doanh tính theo múi giờ Việt Nam. Các ca được chọn thủ công, không giới hạn khung giờ. Báo cáo ngày tổng hợp 3 ca; doanh thu chỉ tính đơn đã thanh toán. Giá trong đơn là giá tại thời điểm tạo, không đổi theo chỉnh sửa menu.
+Ngày kinh doanh tính theo múi giờ Việt Nam. Các ca được chọn thủ công, không giới hạn khung giờ. Báo cáo ngày tổng hợp 3 ca; doanh thu chỉ tính đơn đã thanh toán. Giá trong đơn là giá tại thời điểm tạo, không đổi theo chỉnh sửa menu. Sửa đơn giữ nguyên mã đơn, ngày, ca và trạng thái thanh toán; đơn cũ được lưu trong lịch sử chỉnh sửa của dữ liệu xuất. Nếu sửa đơn thuộc ca đã kết, doanh thu ca được tính lại, giữ doanh thu gốc và đánh dấu đã điều chỉnh. Việc sửa tổng tiền của đơn đã thanh toán không tự thực hiện thu thêm hoặc hoàn tiền ngoài thực tế.
 
 ## Dữ liệu
 
@@ -34,6 +34,6 @@ Menu, đơn hàng và báo cáo kết ca lưu trong localStorage (`lam-an-pos-v1
 npm test
 ```
 
-Playwright chạy 6 kịch bản trên desktop 1440px và điện thoại 390px: tạo đơn, số lượng/tổng tiền, lưu qua reload, thanh toán, chặn kết ca khi chưa thu tiền, kết ca, thêm/tìm món, tên bàn tùy ý, lịch sử, phân tách 3 ca và kiểm tra tràn màn hình.
+Playwright chạy 12 kịch bản trên desktop 1440px và điện thoại 390px: tạo đơn, số lượng/tổng tiền, lưu qua reload, thanh toán, chặn kết ca khi chưa thu tiền, kết ca, thêm/tìm món, tên bàn tùy ý, lịch sử, phân tách 3 ca và kiểm tra tràn màn hình. Bao gồm sửa đơn từ lịch sử, lưu qua reload không tạo bản trùng, giữ metadata thanh toán, cập nhật ca đã kết, hủy sửa và chặn dữ liệu không hợp lệ.
 
 Cấu hình dùng Chromium hệ thống tại `/usr/bin/chromium` trong môi trường cloud. Có thể đặt biến `CHROMIUM_PATH` cho máy khác, hoặc bỏ biến khi không có Chromium hệ thống để dùng browser do `npx playwright install chromium` cài đặt.

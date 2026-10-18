@@ -10,3 +10,6 @@
 .brand-avatar{display:block;object-fit:contain;width:38px;height:38px;border:0;background:transparent}
 @media(max-width:1150px){.brand-logo{width:55px;height:55px}.brand{font-size:21px;gap:9px}}
 @media(max-width:560px){.brand-avatar{width:34px;height:34px}}
+.edit-order-button{margin:0 0 10px;justify-content:center}
+.item-price-label{margin:8px 0 0;font-size:9px}
+.item-price-label input{width:125px;max-width:100%;margin-top:5px;padding:8px;font-size:11px}

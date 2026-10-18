@@ -22,3 +22,31 @@ test('three shifts, validation and responsive bounds',async({page})=>{
  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();
  await page.screenshot({path:`test-results/dashboard-${test.info().project.name}.png`,fullPage:true});
 });
+
+test('edit from history updates existing order and persists without duplicating',async({page})=>{
+ await newOrder(page);await addCoffee(page);await page.getByRole('button',{name:'Lưu đơn hàng',exact:false}).click();
+ const before=await page.evaluate(()=>JSON.parse(localStorage.getItem('lam-an-pos-v1')).orders[0]);
+ await page.locator('[data-page=history]:visible').click();await page.locator('.history-row').click();await page.getByRole('button',{name:'✎ Sửa đơn',exact:true}).click();
+ await expect(page.getByRole('heading',{name:'Sửa đơn hàng',exact:true})).toBeVisible();await page.locator('#table-input').fill('Mang về 20');await page.locator('#customer-input').fill('Anh Nam');await page.locator('#note-input').fill('Sửa lại: ít đường');
+ await page.getByRole('button',{name:'Tăng Cà phê sữa',exact:true}).click();await page.getByLabel('Đơn giá Cà phê sữa',{exact:true}).fill('23000');await page.getByLabel('Tìm món cho đơn').fill('nuoc suoi');await page.locator('[data-add]').click();
+ await expect(page.locator('#cart-total')).toContainText('61.000');await page.getByRole('button',{name:'Lưu thay đổi',exact:false}).click();await expect(page.locator('.small-dialog')).toContainText('Anh Nam');await expect(page.locator('.small-dialog')).toContainText('61.000');
+ await page.reload();await expect(page.locator('.order-card')).toHaveCount(1);await expect(page.locator('.order-card')).toContainText('Anh Nam');
+ const db=await page.evaluate(()=>JSON.parse(localStorage.getItem('lam-an-pos-v1')));const after=db.orders[0];expect(after.id).toBe(before.id);expect(after.code).toBe(before.code);expect(after.created).toBe(before.created);expect(after.day).toBe(before.day);expect(after.shift).toBe(before.shift);expect(after.status).toBe('open');expect(after.table).toBe('Mang về 20');expect(after.revisions).toHaveLength(1);expect(after.revisions[0].before.items[0].qty).toBe(1);expect(db.menu.find(m=>m.id==='m1').price).toBe(22000);
+});
+
+test('editing a paid order after closing reconciles revenue and retains payment metadata',async({page})=>{
+ await newOrder(page);await addCoffee(page);await page.getByRole('button',{name:'Lưu đơn hàng',exact:false}).click();await page.locator('.order-card').click();await page.getByRole('button',{name:'✓ Xác nhận đã thanh toán'}).click();
+ await page.getByRole('button',{name:'◴ Kết ca',exact:true}).click();await page.getByRole('button',{name:'Kết ca 1 ↗'}).click();await page.getByRole('button',{name:'Xác nhận kết ca'}).click();
+ const before=await page.evaluate(()=>JSON.parse(localStorage.getItem('lam-an-pos-v1')));
+ await page.locator('[data-page=history]:visible').click();await page.locator('.history-row').click();await page.getByRole('button',{name:'✎ Sửa đơn',exact:true}).click();await page.getByRole('button',{name:'Tăng Cà phê sữa',exact:true}).click();await page.getByRole('button',{name:'Lưu thay đổi',exact:false}).click();
+ await expect(page.locator('.small-dialog')).toContainText('Đã thanh toán');await expect(page.locator('.small-dialog')).toContainText('44.000');await page.getByRole('button',{name:'Đóng',exact:true}).click();await expect(page.locator('.history-row')).toContainText('44.000');
+ await page.locator('[data-page=shifts]:visible').click();await expect(page.locator('.daily-total')).toContainText('44.000');await expect(page.locator('.closing-row')).toContainText('Đã điều chỉnh từ 22.000');await page.reload();
+ const after=await page.evaluate(()=>JSON.parse(localStorage.getItem('lam-an-pos-v1')));expect(after.orders).toHaveLength(1);expect(after.orders[0].paidAt).toBe(before.orders[0].paidAt);expect(after.orders[0].status).toBe('paid');expect(after.closings[0].at).toBe(before.closings[0].at);expect(after.closings[0].originalRevenue).toBe(22000);expect(after.closings[0].revenue).toBe(44000);expect(after.closings[0].count).toBe(1);
+});
+
+test('cancel and invalid edits preserve saved order',async({page})=>{
+ await newOrder(page);await addCoffee(page);await page.getByRole('button',{name:'Lưu đơn hàng',exact:false}).click();await page.locator('[data-page=history]:visible').click();await page.locator('.history-row').click();await page.getByRole('button',{name:'✎ Sửa đơn',exact:true}).click();
+ await page.getByLabel('Đơn giá Cà phê sữa',{exact:true}).fill('0');await page.getByRole('button',{name:'Lưu thay đổi',exact:false}).click();await expect(page.getByRole('status')).toContainText('Đơn giá phải');await page.getByRole('button',{name:'Giảm Cà phê sữa',exact:true}).click();await page.getByRole('button',{name:'Lưu thay đổi',exact:false}).click();await expect(page.getByRole('status')).toContainText('ít nhất một món');await page.getByRole('button',{name:'Đóng',exact:true}).click();
+ await expect(page.locator('.small-dialog')).toContainText('22.000');await page.getByRole('button',{name:'✎ Sửa đơn',exact:true}).click();await page.locator('#customer-input').fill('Không lưu');page.once('dialog',d=>d.accept());await page.getByRole('button',{name:'Đóng',exact:true}).click();await expect(page.locator('.small-dialog')).not.toContainText('Không lưu');
+ const order=await page.evaluate(()=>JSON.parse(localStorage.getItem('lam-an-pos-v1')).orders[0]);expect(order.customer).toBe('');expect(order.revisions).toBeUndefined();expect(order.items[0].price).toBe(22000);expect(order.items[0].qty).toBe(1);
+});
