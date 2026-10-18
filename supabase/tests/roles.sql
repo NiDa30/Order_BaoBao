@@ -1,0 +1,68 @@
+begin;
+select public.pos_bootstrap_shop('admin@example.test');
+set local role authenticated;
+set local request.jwt.claim.sub='11111111-1111-4111-8111-111111111111';
+do $$ begin perform public.pos_manage('member.add','{"email":"staff@example.test","name":"Thu ngân","role":"staff"}');end $$;
+do $$ begin perform public.pos_manage('assignment.set','{"userId":"22222222-2222-4222-8222-222222222222","day":"2026-10-18","shift":1}');end $$;
+do $$ declare s jsonb; r bigint; begin
+ s:=public.pos_read_workspace()->'data';
+ s:=jsonb_set(s,'{menu}','[{"id":"m1","name":"Cà phê sữa","category":"Cà phê","price":22000}]');
+ s:=jsonb_set(s,'{orders}','[{"id":"private-order","code":"private-order","day":"2026-10-18","shift":2,"created":"2026-10-18T00:00:00Z","label":"Ca riêng admin","status":"open","items":[{"id":"m1","name":"Cà phê sữa","price":22000,"qty":1}]}]');
+ perform public.pos_save_workspace(0,s);
+end $$;
+set local request.jwt.claim.sub='22222222-2222-4222-8222-222222222222';
+do $$ declare row jsonb; s jsonb; o jsonb; r bigint; begin
+ row:=public.pos_read_workspace();
+ if jsonb_array_length(row#>'{data,orders}')<>0 then raise exception 'Staff saw another shift';end if;
+ if row#>>'{access,role}'<>'staff' then raise exception 'Missing staff role';end if;
+ begin perform count(*) from public.pos_shops;raise exception 'Staff read unfiltered table';exception when insufficient_privilege then null;end;
+ begin perform public.pos_bootstrap_shop('staff@example.test');raise exception 'Staff bootstrapped admin';exception when insufficient_privilege then null;end;
+ begin perform public.pos_list_audit();raise exception 'Staff read audit';exception when insufficient_privilege then null;end;
+ begin perform public.pos_manage('member.update','{"userId":"22222222-2222-4222-8222-222222222222","role":"admin"}');raise exception 'Staff escalated privileges';exception when insufficient_privilege then null;end;
+ begin perform public.pos_manage('shift.adjust','{"day":"2026-10-18","shift":1,"amount":1000,"method":"cash","reason":"invalid"}');raise exception 'Staff adjusted closed shift';exception when insufficient_privilege then null;end;
+ s:=row->'data';
+ begin perform public.pos_save_workspace((row->>'revision')::bigint,jsonb_set(s,'{menu}','[]'));raise exception 'Staff changed menu';exception when insufficient_privilege then null;end;
+ o:='{"id":"staff-order","code":"staff-order","day":"2026-10-18","shift":1,"created":"2026-10-18T00:00:00Z","label":"Bàn 1","status":"open","items":[{"id":"m1","name":"Cà phê sữa","price":22000,"qty":1}]}';
+ begin perform public.pos_save_workspace((row->>'revision')::bigint,jsonb_set(s,'{orders}',jsonb_build_array(jsonb_set(o,'{shift}','2'))));raise exception 'Staff wrote another shift';exception when insufficient_privilege then null;end;
+ row:=public.pos_save_workspace((row->>'revision')::bigint,jsonb_set(s,'{orders}',jsonb_build_array(o)));
+ if row#>>'{data,orders,0,createdByEmail}'<>'staff@example.test' then raise exception 'Missing server creator';end if;
+ s:=jsonb_set(row->'data','{orders,0}',row#>'{data,orders,0}'||'{"status":"paid","paidAt":"2026-10-18T01:00:00Z","paymentMethod":"cash","paidByEmail":"forged@example.test"}'::jsonb);
+ row:=public.pos_save_workspace((row->>'revision')::bigint,s);
+ if row#>>'{data,orders,0,paidByEmail}'<>'staff@example.test' then raise exception 'Forged payment actor';end if;
+ s:=jsonb_set(row->'data','{orders,0,items,0,qty}','2');
+ begin perform public.pos_save_workspace((row->>'revision')::bigint,s);raise exception 'Paid edit without reason';exception when check_violation then null;end;
+ s:=jsonb_set(s,'{orders,0}',s#>'{orders,0}'||'{"editReason":"Khách gọi thêm","settlement":{"kind":"collect","method":"cash","amount":22000,"confirmed":true}}'::jsonb);
+ row:=public.pos_save_workspace((row->>'revision')::bigint,s);
+ if row#>>'{data,orders,0,updatedByEmail}'<>'staff@example.test' then raise exception 'Missing paid editor';end if;
+ s:=jsonb_set(row->'data','{orders,0}',row#>'{data,orders,0}'||'{"status":"cancelled","cancelReason":"test cancel","refundConfirmed":true}'::jsonb);
+ begin perform public.pos_save_workspace((row->>'revision')::bigint,s);raise exception 'Staff cancelled paid order';exception when insufficient_privilege then null;end;
+ o:=o||'{"id":"staff-cancel","code":"staff-cancel"}'::jsonb;
+ row:=public.pos_save_workspace((row->>'revision')::bigint,jsonb_set(row->'data','{orders}',(row#>'{data,orders}')||jsonb_build_array(o)));
+ s:=jsonb_set(row->'data','{orders,1}',row#>'{data,orders,1}'||'{"status":"cancelled","cancelReason":"Nhập dư món"}'::jsonb);
+ row:=public.pos_save_workspace((row->>'revision')::bigint,s);
+ if row#>>'{data,orders,1,cancelledByEmail}'<>'staff@example.test' then raise exception 'Staff cancel not attributed';end if;
+ s:=jsonb_set(row->'data','{closings}','[{"day":"2026-10-18","shift":1,"at":"2026-10-18T02:00:00Z","actualCash":43000,"note":"Thiếu một nghìn","revenue":0,"count":0}]');
+ row:=public.pos_save_workspace((row->>'revision')::bigint,s);
+ if row#>>'{data,closings,0,revenue}'<>'44000' or row#>>'{data,closings,0,discrepancy}'<>'-1000' then raise exception 'Bad close totals';end if;
+ begin perform public.pos_save_workspace((row->>'revision')::bigint,jsonb_set(row->'data','{closings,0,actualCash}','99999'));raise exception 'Staff changed counted cash after close';exception when insufficient_privilege then null;end;
+ row:=public.pos_manage('proposal.submit','{"item":{"id":"m1","name":"Cà phê sữa","category":"Cà phê","price":25000},"reason":"Cập nhật giá mới"}');
+ if row#>>'{data,menu,0,price}'<>'22000' then raise exception 'Proposal changed live price before approval';end if;
+end $$;
+set local request.jwt.claim.sub='11111111-1111-4111-8111-111111111111';
+do $$ declare row jsonb; begin
+ row:=public.pos_read_workspace();if jsonb_array_length(row#>'{data,orders}')<>3 then raise exception 'Private shift lost during staff write';end if;
+ row:=public.pos_manage('shift.adjust','{"day":"2026-10-18","shift":1,"amount":-1000,"method":"cash","reason":"Đối chiếu thiếu tiền"}');
+ if row#>>'{data,closings,0,revenue}'<>'43000' then raise exception 'Adjustment failed';end if;
+ if jsonb_array_length(public.pos_list_audit())<6 then raise exception 'Missing audit records';end if;
+ row:=public.pos_manage('proposal.review',jsonb_build_object('id',row#>>'{access,proposals,0,id}','decision','approved'));
+ if row#>>'{data,menu,0,price}'<>'25000' then raise exception 'Approved proposal not applied';end if;
+ if (select value#>>'{items,0,price}' from jsonb_array_elements(row#>'{data,orders}') where value->>'id'='staff-order')<>'22000' then raise exception 'Menu change repriced historical order';end if;
+ begin perform public.pos_manage('member.add','{"email":"admin@example.test","role":"staff"}');raise exception 'Owner demoted by add-member path';exception when insufficient_privilege then null;end;
+ perform public.pos_manage('member.update','{"userId":"22222222-2222-4222-8222-222222222222","active":false}');
+end $$;
+set local request.jwt.claim.sub='22222222-2222-4222-8222-222222222222';
+do $$ begin
+ begin perform public.pos_read_workspace();raise exception 'Blocked member could read';exception when insufficient_privilege then null;end;
+end $$;
+rollback;
+\echo 'PASS: shared shop, staff shift isolation, audited paid edits, cancellation permissions, close reconciliation, admin-only actions and account lock'
