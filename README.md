@@ -1,4 +1,4 @@
-# Lâm An POS
+# Lam An POS
 
 Ứng dụng tính tiền cho quán cà phê, giao diện tiếng Việt, responsive từ điện thoại đến desktop. Vite + JavaScript, không cần backend hoặc tài khoản.
 
