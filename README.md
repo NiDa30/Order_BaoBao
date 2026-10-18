@@ -78,6 +78,19 @@ Supabase tự cung cấp các biến server `SUPABASE_URL`, `SUPABASE_ANON_KEY`,
 - Snapshot phù hợp quán nhỏ, chưa phân trang; lịch sử lớn cần tách bảng/đồng bộ từng bản ghi. Nhật ký UI giới hạn 500 dòng mới nhất, dữ liệu cũ vẫn nằm trong database.
 - Chưa có service worker để mở ứng dụng từ đầu hoàn toàn offline. Xóa dữ liệu trình duyệt sẽ mất phần chưa đồng bộ. Đơn đang soạn chưa bấm lưu là bản nháp tạm thời.
 
+## Xuất dữ liệu cho admin
+
+Vào **Xuất dữ liệu** trong menu admin (trên điện thoại có thể cuộn thanh menu ngang), chọn loại file và bấm tải:
+
+- Danh sách đơn CSV: lọc ngày, ca và trạng thái; có tổng giá trị, doanh thu thực ghi nhận, tiền mặt/chuyển khoản, người tạo/thu/sửa, lý do hủy.
+- Chi tiết món CSV: từng món trong từng đơn, số lượng, đơn giá và thành tiền, áp dụng cùng bộ lọc đơn.
+- Báo cáo kết ca CSV: doanh thu gốc/đã chốt, điều chỉnh, người kết, tiền thực đếm và chênh lệch; lọc ngày/ca.
+- Doanh thu CSV: một dòng cho mỗi ngày/ca, gồm đơn thanh toán/hủy và điều chỉnh. Bộ lọc trạng thái không áp dụng để tránh làm sai số doanh thu.
+- Thực đơn CSV: toàn bộ menu hiện tại, bỏ qua bộ lọc ngày/ca/trạng thái.
+- Sao lưu POS JSON: toàn bộ menu, đơn, lịch sử sửa và kết ca đang có trên máy, kèm thời điểm xuất/trạng thái đồng bộ. Không chứa thông tin đăng nhập/token, không bao gồm toàn bộ database/Auth/audit/membership của Supabase. Chưa có chức năng tự khôi phục từ file.
+
+CSV dùng UTF-8 BOM, quote đầy đủ các trường có dấu phẩy, dấu nháy và xuống dòng; vô hiệu công thức trong text người dùng khi mở bằng spreadsheet. File lấy từ dữ liệu đang có trên thiết bị; đồng bộ mọi máy trước khi chốt báo cáo chính thức. Ngày trống lấy tất cả; khoảng ngày sai sẽ chặn tải. Xuất dữ liệu không sửa/xóa dữ liệu và không cần migration mới. Nhân viên không có menu hoặc quyền xuất trong ứng dụng.
+
 ## Kiểm thử
 
 ```sh
