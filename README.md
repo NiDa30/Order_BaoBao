@@ -1,6 +1,6 @@
 # Lam An POS
 
-Ứng dụng tính tiền cho quán cà phê, giao diện tiếng Việt, responsive từ điện thoại đến desktop. Vite + JavaScript. Có chế độ lưu trên máy và đồng bộ Supabase qua tài khoản email/password.
+Ứng dụng tính tiền cho quán cà phê, giao diện tiếng Việt, responsive từ điện thoại đến desktop. Vite + JavaScript. Đăng nhập Supabase bằng email/password trước khi vào POS; dữ liệu được cache trên máy và đồng bộ theo tài khoản.
 
 ## Chạy dự án
 
@@ -15,7 +15,7 @@ npm run dev
 
 ## Quy trình bán hàng
 
-1. Chọn một trong 3 ca tại Quầy bán hàng.
+1. Đăng nhập, rồi chọn một trong 3 ca tại Quầy bán hàng.
 2. Tạo đơn, chọn số bàn 1–15 hoặc nhập số/tên tùy ý; có thể điền tên khách.
 3. Tìm món không dấu hoặc có dấu, chọn món và điều chỉnh số lượng. Không có món thì chọn **Thêm món**, nhập tên và giá.
 4. Lưu đơn; mở đơn từ danh sách, chọn **Tiền mặt** hoặc **Chuyển khoản** và xác nhận đã thanh toán sau khi nhận tiền. Phương thức được lưu cùng đơn và hiển thị trong lịch sử.
@@ -26,7 +26,7 @@ Ngày kinh doanh tính theo múi giờ Việt Nam. Các ca được chọn thủ
 
 ## Dữ liệu
 
-Menu, đơn hàng và báo cáo kết ca được lưu local sau mỗi thao tác xác nhận. Chưa đăng nhập: dữ liệu riêng trong `lam-an-pos-v1`, chỉ có trên trình duyệt/địa chỉ web này. Đã đăng nhập: dữ liệu được giữ trong cache riêng theo project + tài khoản và đồng bộ lên Supabase. Chỉ trạng thái **Đã đồng bộ** mới xác nhận bản hiện tại đã lưu lên database. Thay đổi chưa đồng bộ sẽ mất nếu xóa dữ liệu trình duyệt. Nên xuất dữ liệu thường xuyên. Đơn đang soạn chưa bấm lưu là bản nháp tạm thời. Không có dữ liệu bán hàng giả. Menu khởi tạo theo ảnh người dùng cung cấp; mục ép ổi bị che giá/tên trong ảnh không được tự suy đoán.
+Menu, đơn hàng và báo cáo kết ca được lưu local sau mỗi thao tác xác nhận. Chưa đăng nhập: chỉ hiện màn hình đăng nhập, không cho xem/tạo đơn, thực đơn hoặc báo cáo. Dữ liệu cũ trong `lam-an-pos-v1` được giữ riêng để nhập sau. Đã đăng nhập: dữ liệu được giữ trong cache riêng theo project + tài khoản và đồng bộ lên Supabase. Chỉ trạng thái **Đã đồng bộ** mới xác nhận bản hiện tại đã lưu lên database. Thay đổi chưa đồng bộ sẽ mất nếu xóa dữ liệu trình duyệt. Nên xuất dữ liệu thường xuyên. Đơn đang soạn chưa bấm lưu là bản nháp tạm thời. Không có dữ liệu bán hàng giả. Menu khởi tạo theo ảnh người dùng cung cấp; mục ép ổi bị che giá/tên trong ảnh không được tự suy đoán.
 
 ## Kiểm thử
 
@@ -52,7 +52,7 @@ Cấu hình dùng Chromium hệ thống tại `/usr/bin/chromium` trong môi tr�
 2. Tạo tài khoản bằng **Authentication → Users → Add user** trong Supabase (email + password, xác nhận email theo cấu hình dự án). Không gửi mật khẩu qua chat hoặc ghi vào repo.
 3. Copy `.env.example` thành `.env.local`, điền `VITE_SUPABASE_URL` và `VITE_SUPABASE_PUBLISHABLE_KEY` (hoặc `VITE_SUPABASE_ANON_KEY` cho anon key cũ) từ Settings → API Keys. Không dùng service_role, secret key hoặc mật khẩu Postgres trong frontend. File `.env.local` đã được Git bỏ qua.
 4. Khởi động lại `npm run dev`. Khi deploy, đặt các biến `VITE_...` tương tự trong build environment của nền tảng deploy rồi build lại; Vite đọc cấu hình ở thời điểm build. Việc kết nối tài khoản Supabase trong công cụ khác không tự tạo các biến này trong repo.
-5. Bấm **Đăng nhập đồng bộ** ở góc trên ứng dụng, đăng nhập và đợi **Đã đồng bộ**. Chưa đăng nhập vẫn bán hàng local, chưa gửi dữ liệu lên Supabase.
+5. Mở ứng dụng sẽ hiện màn hình đăng nhập. Nhập email/password và đợi **Đã đồng bộ** sau khi vào dashboard. Phiên hợp lệ được khôi phục khi reload; đăng xuất quay lại màn hình đăng nhập. Thiếu cấu hình Supabase sẽ chặn truy cập và hiện thông báo liên hệ quản lý, không mở POS local.
 6. Nếu có đơn cũ trên máy, chọn **Nhập dữ liệu cũ vào tài khoản**. Chỉ nhập vào tài khoản chưa có đơn/báo cáo ca và chưa sửa menu, tránh ghi đè. Bản local cũ được giữ nguyên. Nếu tài khoản đã có dữ liệu, xuất JSON để đối chiếu trước, chưa tự động gộp lịch sử cũ.
 7. Trên thiết bị khác, dùng **cùng tài khoản** để xem cùng dữ liệu. Mỗi tài khoản hiện có workspace riêng; chưa có tính năng nhiều tài khoản nhân viên cùng một quán hoặc phân quyền quản lý/thu ngân.
 
@@ -68,6 +68,6 @@ Cấu hình dùng Chromium hệ thống tại `/usr/bin/chromium` trong môi tr�
 
 ### Kiểm thử Supabase
 
-`npm test` chạy POS, merge và browser contract tests trên desktop/mobile. Các browser tests dùng URL/key giả và mock Supabase API, không gửi dữ liệu test lên dự án thật. Test server ở port 5175, tách khỏi dev server 5173.
+`npm test` chạy POS, màn hình đăng nhập, đăng xuất, khôi phục phiên, merge và browser contract tests trên desktop/mobile. Các browser tests dùng URL/key giả và mock Supabase API, không gửi dữ liệu test lên dự án thật. Test server ở port 5175, tách khỏi dev server 5173.
 
 `npm run test:db` cần Docker, tạo PostgreSQL 17 tạm, mô phỏng role/auth UID của Supabase rồi chạy migration hai lần và kiểm tra: lưu/đọc, CAS, validation, payment, kết ca, tính lại doanh thu, RLS theo owner và từ chối anon. Không thay thế kiểm tra end-to-end trên Supabase thật.

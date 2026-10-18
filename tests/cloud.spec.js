@@ -1,30 +1,5 @@
 import {test,expect} from '@playwright/test';
-const endpoint='https://test-project.supabase.co';
-const user={id:'11111111-1111-4111-8111-111111111111',email:'pos@example.test',aud:'authenticated',role:'authenticated',created_at:'2026-01-01T00:00:00Z',app_metadata:{},user_metadata:{}};
-const jwt=()=>`${Buffer.from(JSON.stringify({alg:'HS256',typ:'JWT'})).toString('base64url')}.${Buffer.from(JSON.stringify({sub:user.id,role:'authenticated',exp:Math.floor(Date.now()/1000)+3600})).toString('base64url')}.test-signature`;
-async function mock(context,server){
- await context.route(`${endpoint}/**`,async route=>{
-  const request=route.request(),path=new URL(request.url()).pathname;
-  const headers={'access-control-allow-origin':'*','access-control-allow-headers':'*','access-control-allow-methods':'GET,POST,OPTIONS','content-type':'application/json'};
-  const reply=(body,status=200)=>route.fulfill({status,headers,body:JSON.stringify(body)});
-  if(request.method()==='OPTIONS')return route.fulfill({status:204,headers});
-  if(path==='/auth/v1/token')return reply({access_token:jwt(),refresh_token:'test-refresh',token_type:'bearer',expires_in:3600,user});
-  if(path==='/auth/v1/logout')return reply({});
-  if(path==='/auth/v1/user')return reply(user);
-  if(server.offline)return route.abort('internetdisconnected');
-  if(path==='/rest/v1/rpc/pos_read_workspace')return reply(server.workspace);
-  if(path==='/rest/v1/rpc/pos_save_workspace'){
-   const body=request.postDataJSON();
-   if(body.expected_revision!==(server.workspace?.revision||0))return reply({code:'40001',message:'Conflict'},409);
-   server.workspace={revision:(server.workspace?.revision||0)+1,data:structuredClone(body.next_data)};
-   return reply(server.workspace);
-  }
-  return reply({message:'Unexpected test request'},404);
- });
-}
-async function login(page){
- await page.goto('/');await page.locator('.topbar [data-action=cloud]').click();await page.locator('#cloud-login [name=email]').fill(user.email);await page.locator('#cloud-login [name=password]').fill('synthetic-test-password');await page.getByRole('button',{name:'Đăng nhập & đồng bộ',exact:true}).click();await expect(page.locator('.cloud-summary')).toContainText('Đã đồng bộ');await page.getByRole('button',{name:'Đóng',exact:true}).click();
-}
+import {mock,login} from './helpers/cloud.js';
 async function createOrder(page){
  await page.getByRole('button',{name:'＋ Tạo đơn mới',exact:true}).click();await page.getByRole('button',{name:/Cà phê Cà phê sữa/}).click();await page.getByRole('button',{name:'Lưu đơn hàng',exact:false}).click();await expect(page.locator('.topbar [data-cloud-label]')).toHaveText('Đã đồng bộ');
 }
@@ -47,6 +22,6 @@ test('concurrent edits surface conflict and keep both versions until explicit ch
  await page.getByRole('button',{name:'Đóng',exact:true}).click();await page.locator('.order-card').click();await expect(page.locator('.small-dialog')).toContainText('Ghi chú từ máy khác');
 });
 test('legacy local sales stay separate and import requires explicit action',async({page,context})=>{
- const server={workspace:null};await mock(context,server);await page.goto('/');await page.getByRole('button',{name:'＋ Tạo đơn mới',exact:true}).click();await page.getByRole('button',{name:/Cà phê Cà phê sữa/}).click();await page.getByRole('button',{name:'Lưu đơn hàng',exact:false}).click();await login(page);await expect(page.locator('.order-card')).toHaveCount(0);expect(server.workspace.data.orders).toHaveLength(0);
+ const server={workspace:null};await mock(context,server);await page.goto('/');await page.evaluate(()=>localStorage.setItem('lam-an-pos-v1',JSON.stringify({menu:[{id:'m1',name:'Cà phê sữa',category:'Cà phê',price:22000}],orders:[{id:'legacy-order',code:'legacy-001',created:new Date().toISOString(),day:'2026-10-18',shift:1,table:'1',customer:'',note:'',label:'Bàn 1',status:'open',items:[{id:'m1',name:'Cà phê sữa',price:22000,qty:1}]}],closings:[]})));await login(page);await expect(page.locator('.order-card')).toHaveCount(0);expect(server.workspace.data.orders).toHaveLength(0);
  await page.locator('.topbar [data-action=cloud]').click();page.once('dialog',dialog=>dialog.accept());await page.getByRole('button',{name:'Nhập dữ liệu cũ vào tài khoản',exact:true}).click();await expect(page.locator('.cloud-summary')).toContainText('Đã đồng bộ');expect(server.workspace.data.orders).toHaveLength(1);expect(await page.evaluate(()=>JSON.parse(localStorage.getItem('lam-an-pos-v1')).orders.length)).toBe(1);
 });

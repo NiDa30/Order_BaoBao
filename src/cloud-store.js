@@ -24,13 +24,14 @@ export function createCloudStore(seed,{onData=()=>{},onStatus=()=>{}}={}) {
   let configError='';
   if(url||key){try{if(!url||!key||new URL(url).protocol!=='https:'||!publicKey(key))throw new Error();}catch{configError='Cấu hình Supabase chưa hợp lệ. Chỉ dùng Project URL HTTPS và publishable/anon public key.';}}
   const client=url&&key&&!configError?createClient(url,key):null;
-  let session=null,scope=null,envelope=null,running=false,again=false,generation=0;
+  let session=null,scope=null,envelope=null,running=false,again=false,generation=0,authReady=false;
   const status={mode:configError?'config-error':client?'loading':'local',message:configError,email:'',lastSync:null};
   const notify=patch=>{Object.assign(status,patch);onStatus({...status,configured:!!client,pending:!!envelope&&!same(envelope.local,envelope.base)});};
   const writeCache=(value)=>localStorage.setItem(scope||LOCAL_KEY,JSON.stringify(value));
   const apply=(value)=>{if(same(data,value))return;data=clone(value);onData(clone(data));};
   const cache=(next)=>{writeCache(next);envelope=next;apply(next.local);};
   function persist(next) {
+    if(!session)return {ok:false,message:'Vui lòng đăng nhập trước khi sử dụng quầy bán hàng.'};
     if(status.mode==='loading')return {ok:false,message:'Đang tải dữ liệu tài khoản. Vui lòng đợi một chút.'};
     try {
       if(scope){const latest=readJSON(scope);if(latest&&isSnapshot(latest.local)&&isSnapshot(latest.base)){next=mergeSnapshots(data,next,latest.local);envelope=latest;}cache({...envelope,local:clone(next)});}
@@ -80,8 +81,8 @@ export function createCloudStore(seed,{onData=()=>{},onStatus=()=>{}}={}) {
     }finally{running=false;if(token!==generation&&session)void sync();}
   }
   async function setSession(next) {
-    if((session?.user.id||null)===(next?.user.id||null)&&status.mode!=='loading') {session=next;return;}
-    generation++;session=next;
+    if(authReady&&(session?.user.id||null)===(next?.user.id||null)) {session=next;return;}
+    authReady=true;generation++;session=next;
     if(!session){
       scope=null;envelope=null;
       const legacy=readJSON(LOCAL_KEY);apply(isSnapshot(legacy)?legacy:{menu:clone(seed),orders:[],closings:[]});
@@ -96,9 +97,9 @@ export function createCloudStore(seed,{onData=()=>{},onStatus=()=>{}}={}) {
     await sync();
   }
   async function start() {
-    if(!client){notify({});return;}
+    if(!client){authReady=true;notify({});return;}
     const {data:auth,error}=await client.auth.getSession();
-    if(error){notify({mode:'error',message:friendly(error)});return;}
+    if(error){authReady=true;notify({mode:'error',message:friendly(error)});return;}
     await setSession(auth.session);
     client.auth.onAuthStateChange((_event,next)=>{
       // Avoid awaiting Supabase calls in the auth callback (auth-js lock).
@@ -144,5 +145,5 @@ export function createCloudStore(seed,{onData=()=>{},onStatus=()=>{}}={}) {
     const latest=readJSON(scope);
     if(latest&&isSnapshot(latest.base)&&isSnapshot(latest.local)){envelope=latest;apply(latest.local);notify({mode:same(latest.local,latest.base)?'synced':'pending',message:same(latest.local,latest.base)?'Đã nhận dữ liệu từ tab khác.':'Đã nhận thay đổi đang chờ đồng bộ từ tab khác.'});}
   });
-  return {read:()=>clone(data),persist,start,login,logout,sync,importLocal,useRemote,status:()=>({...status,configured:!!client}),legacy:()=>readJSON(LOCAL_KEY),hasSession:()=>!!session,destroy:()=>{clearInterval(interval);client?.auth.stopAutoRefresh();}};
+  return {read:()=>clone(data),persist,start,login,logout,sync,importLocal,useRemote,status:()=>({...status,configured:!!client,authReady}),legacy:()=>readJSON(LOCAL_KEY),hasSession:()=>!!session,destroy:()=>{clearInterval(interval);client?.auth.stopAutoRefresh();}};
 }
