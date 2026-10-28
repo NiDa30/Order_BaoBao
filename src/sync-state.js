@@ -12,20 +12,21 @@ export class SyncConflict extends Error {
     super(message);this.name='SyncConflict';
   }
 }
-const recordKey=(kind,item)=>kind==='closings'?`${item.day}:${item.shift}`:item.id;
+const recordKey=(kind,item)=>kind==='closings'||kind==='openings'?`${item.day}:${item.shift}`:item.id;
 
 // Three-way merge: independent records merge; concurrent edits to one record never silently overwrite.
 export function mergeSnapshots(base,local,remote) {
-  const result={menu:[],orders:[],closings:[]};
+  const hasOpenings=!!(base.openings||local.openings||remote.openings);
+  const result=hasOpenings?{menu:[],orders:[],closings:[],openings:[]}:{menu:[],orders:[],closings:[]};
   for(const kind of Object.keys(result)) {
-    const index=snapshot=>new Map(snapshot[kind].map(item=>[recordKey(kind,item),item]));
+    const index=snapshot=>new Map((snapshot[kind]||[]).map(item=>[recordKey(kind,item),item]));
     const b=index(base),l=index(local),r=index(remote);
     for(const id of new Set([...b.keys(),...l.keys(),...r.keys()])) {
       const before=b.get(id),mine=l.get(id),theirs=r.get(id);
       let chosen;
       if(same(mine,before))chosen=theirs;
       else if(same(theirs,before)||same(mine,theirs))chosen=mine;
-      else throw new SyncConflict(`Cùng một ${kind==='orders'?'đơn hàng':kind==='menu'?'món':'ca'} đã được sửa trên hai thiết bị. Các thay đổi trên máy vẫn được giữ lại.`);
+      else throw new SyncConflict(`Cùng một ${kind==='orders'?'đơn hàng':kind==='menu'?'món':kind==='closings'?'báo cáo ca':'ca'} đã được sửa trên hai thiết bị. Các thay đổi trên máy vẫn được giữ lại.`);
       if(chosen)result[kind].push(clone(chosen));
     }
   }

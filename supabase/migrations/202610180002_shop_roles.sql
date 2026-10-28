@@ -73,6 +73,9 @@ begin
   result:=jsonb_build_object('menu',w.data->'menu',
    'orders',coalesce((select jsonb_agg(o) from jsonb_array_elements(w.data->'orders') o where public.pos_can_shift(w.id,(o->>'day')::date,(o->>'shift')::int)),'[]'),
    'closings',coalesce((select jsonb_agg(c) from jsonb_array_elements(w.data->'closings') c where public.pos_can_shift(w.id,(c->>'day')::date,(c->>'shift')::int)),'[]'));
+  if w.data ? 'openings' then
+   result:=result||jsonb_build_object('openings',coalesce((select jsonb_agg(op) from jsonb_array_elements(w.data->'openings') op where public.pos_can_shift(w.id,(op->>'day')::date,(op->>'shift')::int)),'[]'));
+  end if;
  end if;
  select coalesce(jsonb_agg(to_jsonb(p) order by p.created_at desc),'[]') into proposals from public.pos_proposals p where p.shop_id=m.shop_id and (m.role='admin' or p.submitted_by=m.user_id);
  if m.role='admin' then select coalesce(jsonb_agg(to_jsonb(n) order by n.email),'[]') into members from public.pos_members n where n.shop_id=m.shop_id;else members:='[]';end if;
@@ -96,7 +99,8 @@ begin
   if next_data is null or jsonb_typeof(next_data) is distinct from 'object'
     or jsonb_typeof(next_data->'menu') is distinct from 'array'
     or jsonb_typeof(next_data->'orders') is distinct from 'array'
-    or jsonb_typeof(next_data->'closings') is distinct from 'array' then
+    or jsonb_typeof(next_data->'closings') is distinct from 'array'
+    or (next_data ? 'openings' and jsonb_typeof(next_data->'openings') is distinct from 'array') then
     raise exception 'Invalid workspace shape' using errcode='23514';
   end if;
   select * into member from public.pos_members pm where pm.user_id=auth.uid() and pm.active;
@@ -108,13 +112,18 @@ begin
   if member.role<>'admin' then
     if next_data->'menu'<>current_row.data->'menu' then raise exception 'Chỉ admin được sửa menu' using errcode='42501'; end if;
     if exists(select 1 from jsonb_array_elements(next_data->'orders') o where not public.pos_can_shift(member.shop_id,(o->>'day')::date,(o->>'shift')::int))
-      or exists(select 1 from jsonb_array_elements(next_data->'closings') c where not public.pos_can_shift(member.shop_id,(c->>'day')::date,(c->>'shift')::int)) then
+      or exists(select 1 from jsonb_array_elements(next_data->'closings') c where not public.pos_can_shift(member.shop_id,(c->>'day')::date,(c->>'shift')::int))
+      or (next_data ? 'openings' and exists(select 1 from jsonb_array_elements(next_data->'openings') op where not public.pos_can_shift(member.shop_id,(op->>'day')::date,(op->>'shift')::int))) then
       raise exception 'Không có quyền trên ca này' using errcode='42501';
     end if;
     select coalesce(jsonb_agg(o),'[]') into merged_orders from jsonb_array_elements(current_row.data->'orders') o where not public.pos_can_shift(member.shop_id,(o->>'day')::date,(o->>'shift')::int);
     next_data:=jsonb_set(next_data,'{orders}',merged_orders||(next_data->'orders'));
     select coalesce(jsonb_agg(c),'[]') into merged_orders from jsonb_array_elements(current_row.data->'closings') c where not public.pos_can_shift(member.shop_id,(c->>'day')::date,(c->>'shift')::int);
     next_data:=jsonb_set(next_data,'{closings}',merged_orders||(next_data->'closings'));
+    if current_row.data ? 'openings' or next_data ? 'openings' then
+      select coalesce(jsonb_agg(op),'[]') into merged_orders from jsonb_array_elements(coalesce(current_row.data->'openings','[]'::jsonb)) op where not public.pos_can_shift(member.shop_id,(op->>'day')::date,(op->>'shift')::int);
+      next_data:=jsonb_set(next_data,'{openings}',merged_orders||coalesce(next_data->'openings','[]'::jsonb));
+    end if;
   end if;
   if current_row.revision<>expected_revision then
     raise exception 'Workspace changed; fetch and merge again' using errcode='40001';
@@ -278,11 +287,19 @@ begin
     normalized_closings:=normalized_closings||jsonb_build_array(closing);
     seen:=array_append(seen,identity);
   end loop;
+  if exists(select 1 from jsonb_array_elements(normalized_closings) c
+    left join lateral (select op from jsonb_array_elements(coalesce(next_data->'openings','[]'::jsonb)) op
+      where op->>'day'=c->>'day' and op->>'shift'=c->>'shift' limit 1) o on true
+    where (c->>'at')::timestamptz<coalesce((o.op->>'openedAt')::timestamptz,(c->>'openedAt')::timestamptz)) then
+    raise exception 'Thời gian kết ca không được trước thời gian mở ca' using errcode='23514';
+  end if;
   if exists(select 1 from jsonb_array_elements(current_row.data->'closings') c
     where not ((c->>'day')||':'||(c->>'shift')=any(seen))) then
     raise exception 'Existing closings cannot be removed' using errcode='23514';
   end if;
-  next_data:=jsonb_build_object('menu',next_data->'menu','orders',next_data->'orders','closings',normalized_closings);
+  next_data:=jsonb_build_object('menu',next_data->'menu','orders',next_data->'orders','closings',normalized_closings)
+    ||case when next_data ? 'openings' or current_row.data ? 'openings'
+      then jsonb_build_object('openings',coalesce(next_data->'openings',current_row.data->'openings','[]'::jsonb)) else '{}'::jsonb end;
   if current_row.data->'menu'<>next_data->'menu' then
     insert into public.pos_audit(shop_id,actor_id,actor_email,action,target_id,before_data,after_data) values(member.shop_id,user_id,actor_email,'menu.update','menu',current_row.data->'menu',next_data->'menu');
   end if;
@@ -337,6 +354,27 @@ begin
     update public.pos_shops set data=jsonb_set(data,'{menu}',new_c||jsonb_build_array(updated)),revision=revision+1,updated_at=now() where id=m.shop_id;
    end if;
    update public.pos_proposals set status=pos_manage.payload->>'decision',reviewed_by=m.user_id,reviewed_at=now() where id=proposal.id;
+  when 'shift.open' then
+    if length(coalesce(pos_manage.payload->>'day',''))=0 or coalesce(pos_manage.payload->>'shift','') not in ('1','2','3') then
+      raise exception 'Thông tin ca không hợp lệ' using errcode='23514';
+    end if;
+    if exists(select 1 from jsonb_array_elements(coalesce(w.data->'closings','[]'::jsonb)) c
+      where c->>'day'=pos_manage.payload->>'day' and c->>'shift'=pos_manage.payload->>'shift') then
+      raise exception 'Ca đã kết, không thể thay đổi giờ mở ca' using errcode='23514';
+    end if;
+    if pos_manage.payload ? 'staffId' and length(coalesce(pos_manage.payload->>'staffId',''))>0 then
+      u:=(pos_manage.payload->>'staffId')::uuid;
+      if not exists(select 1 from public.pos_members where user_id=u and shop_id=m.shop_id and active) then
+        raise exception 'Nhân viên không hoạt động' using errcode='23514';
+      end if;
+      insert into public.pos_assignments(shop_id,user_id,day,shift)
+      values(m.shop_id,u,(pos_manage.payload->>'day')::date,(pos_manage.payload->>'shift')::smallint)
+      on conflict do nothing;
+    end if;
+    select coalesce(jsonb_agg(op),'[]'::jsonb) into updated from jsonb_array_elements(coalesce(w.data->'openings','[]'::jsonb)) op
+      where not (op->>'day'=pos_manage.payload->>'day' and op->>'shift'=pos_manage.payload->>'shift');
+    updated:=updated||jsonb_build_array(pos_manage.payload);
+    update public.pos_shops set data=jsonb_set(data,'{openings}',updated),revision=revision+1,updated_at=now() where id=m.shop_id;
   when 'shift.adjust' then
    if length(btrim(coalesce(pos_manage.payload->>'reason','')))<3 or coalesce(pos_manage.payload->>'method','') not in ('cash','transfer') then raise exception 'Cần phương thức và lý do điều chỉnh' using errcode='23514';end if;
    amount:=(pos_manage.payload->>'amount')::numeric;
@@ -352,7 +390,7 @@ begin
   end case;
  end if;
  insert into public.pos_audit(shop_id,actor_id,actor_email,action,target_id,reason,before_data,after_data)
- values(m.shop_id,m.user_id,m.email,action,coalesce(pos_manage.payload->>'userId',pos_manage.payload->>'email',pos_manage.payload->>'id',pos_manage.payload->>'day'),coalesce(pos_manage.payload->>'reason',''),case when action='shift.adjust' then c else null end,payload);
+ values(m.shop_id,m.user_id,m.email,action,coalesce(pos_manage.payload->>'userId',pos_manage.payload->>'email',pos_manage.payload->>'id',pos_manage.payload->>'day'),coalesce(pos_manage.payload->>'reason',pos_manage.payload->>'openNote',''),case when action='shift.adjust' then c else null end,payload);
  return public.pos_read_workspace();
 end;$$;
 create or replace function public.pos_list_audit() returns jsonb language plpgsql security definer set search_path=public,pg_temp as $$

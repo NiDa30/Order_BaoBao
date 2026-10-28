@@ -55,7 +55,9 @@ Supabase tự cung cấp các biến server `SUPABASE_URL`, `SUPABASE_ANON_KEY`,
 | Hủy đơn | Cả đơn chưa/đã thu | Chỉ đơn chưa thu trong ca được phân công |
 | Thay đổi menu, đổi giá | Cập nhật trực tiếp; duyệt đề xuất | Gửi đề xuất, không trực tiếp đổi menu chung |
 | Doanh thu | Ngày, tuần (thứ Hai–Chủ nhật), tháng, lọc ca | Chỉ ca được phân công |
-| Mở / đóng ca | Không | Ca được phân công |
+| Mở ca | Mọi ca (mở thay nhân viên, tự gán phân ca) | Ca được phân công (theo thời gian thực, cho phép chỉnh giờ) |
+| Kết ca | Mọi ca (kết thay nhân viên, ghi nhận người phụ trách) | Ca được phân công (theo thời gian thực, cho phép chỉnh giờ) |
+| Phân ca nhanh trên thẻ ca | Có, gán trực tiếp cho từng ca trong ngày | Không |
 | Điều chỉnh ca đã kết | Có, phải ghi lý do | Không |
 | Tài khoản, phân ca, khóa quyền, đổi vai trò | Có; không khóa/hạ quyền chủ quán | Không |
 | Xuất đơn/báo cáo, nhật ký | JSON dữ liệu, CSV báo cáo; 500 nhật ký gần nhất | Không |
@@ -64,6 +66,10 @@ Supabase tự cung cấp các biến server `SUPABASE_URL`, `SUPABASE_ANON_KEY`,
 - Sửa đơn đã thanh toán bắt buộc lý do. Khi đổi tổng tiền phải xác nhận đã thu thêm/hoàn chênh lệch và chọn tiền mặt/chuyển khoản. Giá đơn cũ không thay đổi theo giá menu mới. Không tự thực hiện giao dịch ngân hàng.
 - Database gắn tài khoản tạo/sửa/thu/hủy, thời gian và revision trước sửa; client không thể giả mạo actor. Nhật ký lưu before/after bất biến qua các RPC, không có API xóa nhật ký/đơn/ca.
 - Hủy đơn giữ lịch sử và loại khỏi doanh thu. Hủy đơn đã thu chỉ admin, bắt buộc lý do và xác nhận đã hoàn đủ theo phương thức đã thu.
+- Quản lý ca làm việc (Mở ca, Kết ca, Phân công):
+  + **Mở ca**: Mặc định lấy thời gian thực hiện tại theo múi giờ Việt Nam, cho phép điều chỉnh giờ mở và tiền mặt đầu ca nếu mở ca trễ hoặc mở trước. Nhân viên mở ca thuộc ca được phân công. Quản lý có quyền mở ca thay cho nhân viên (chọn nhân viên phụ trách; nếu chưa được phân ca thì hệ thống tự động gán phân công). Khi ca đang mở, có thể bấm "Chỉnh giờ mở" để cập nhật lại thời gian mở ca.
+  + **Kết ca**: Tự động lấy thời gian thực hiện tại và cho phép điều chỉnh giờ kết ca. Quản lý có quyền kết ca thay cho nhân viên và chọn rõ người phụ trách/kết thay để lưu trữ đối soát minh bạch. Báo cáo ghi nhận cả thời gian mở và kết ca thực tế.
+  + **Phân công ca nhanh**: Quản lý có thể phân công nhân viên phụ trách ca ngay trên từng thẻ ca ở trang Quản lý ca bằng nút "Phân công", không bắt buộc phải chuyển sang trang Quản trị Nhân viên.
 - Kết ca cần giải quyết hết đơn mở, nhập tiền mặt thực đếm và ghi chú nếu lệch. Báo cáo ghi tiền hệ thống, thực đếm, chênh lệch và người kết. Đơn hủy không tính doanh thu. Đơn cũ chưa có đối chiếu hiển thị “Chưa đối chiếu”.
 - Ca đã kết không nhận đơn mới. Sửa đơn đã thu trong ca đó tự cập nhật báo cáo và giữ gốc; đây khác với khoản điều chỉnh ca thủ công chỉ admin được ghi. Điều chỉnh có số tiền dương/âm, phương thức và lý do, được tính vào doanh thu ngày/tuần/tháng.
 - Doanh thu tách dòng tiền mặt/chuyển khoản, bao gồm xử lý chênh lệch sau chỉnh sửa; dữ liệu cũ không có phương thức được hiển thị riêng, không tự suy đoán.
@@ -113,3 +119,7 @@ Chạy toàn bộ `supabase/migrations/202610180003_staff_shift_sessions.sql` sa
 ### Tạm tắt phân ca thủ công (migration 004)
 
 Sau migration 003, chạy `supabase/migrations/202610180004_self_service_shifts.sql`. Admin không còn form phân/gỡ ca; API phân ca thủ công cũng bị chặn. Nhân viên tự mở ca 1–3 trong ngày hiện tại (giờ Việt Nam); hệ thống tự ghi nhận tham gia để giới hạn quyền xem doanh thu/thao tác đúng ca. Quyền và dữ liệu ca cũ được giữ nguyên. Chỉ nhân viên đóng ca; ca đã đóng không mở lại. Mở ca cần kết nối mạng để xác nhận quyền và trạng thái.
+
+### Admin mở/kết ca thay nhân viên (migration 005)
+
+Sau migration 004, chạy toàn bộ `supabase/migrations/202610180005_admin_shift_control.sql`. Migration này thay thế các giới hạn của 003/004: admin được mở và kết ca thay cho nhân viên được chọn, phân ca thủ công hoạt động lại, nhân viên mở/kết ca theo thời gian thực và được chỉnh giờ. Database từ chối giờ kết ca sớm hơn giờ mở ca và không cho đổi giờ mở khi ca đã kết. Bảng `pos_shift_sessions` vẫn được cập nhật theo dữ liệu mở/kết ca để giữ lịch sử.

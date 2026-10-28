@@ -5,7 +5,6 @@ const jwt=()=>`${Buffer.from(JSON.stringify({alg:'HS256',typ:'JWT'})).toString('
 export async function mock(context,server){
  const day=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Ho_Chi_Minh',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
  server.access??={shopId:'test-shop',shopName:'Lam An',userId:user.id,email:user.email,role:'admin',assignments:[],members:[{user_id:user.id,email:user.email,role:'admin',active:true,display_name:'Admin'}],proposals:[]};
- server.access.shiftSessions??=[1,2,3].map(shift=>({day,shift,status:'open',opened_by:user.id,opened_by_email:'staff@example.test'}));
  const view=()=>{const w=server.workspace||{data:{menu:[],orders:[],closings:[]},revision:0};return {...w,access:server.access};};
 
  await context.route(`${endpoint}/**`,async route=>{
@@ -28,12 +27,20 @@ export async function mock(context,server){
   if(path==='/rest/v1/rpc/pos_list_audit')return reply(server.audit||[]);
   if(path==='/rest/v1/rpc/pos_manage'){
    const {action,payload}=request.postDataJSON();server.calls??=[];server.calls.push({action,payload});
-   if(action==='shift.open'){server.access.assignments.push({day:payload.day,shift:payload.shift,user_id:user.id});server.access.shiftSessions=server.access.shiftSessions.filter(s=>s.day!==payload.day||s.shift!==payload.shift);server.access.shiftSessions.push({...payload,status:'open',opened_by:user.id,opened_by_email:user.email});}
    if(action==='member.add')server.access.members.push({user_id:'staff-new',email:payload.email,display_name:payload.name,role:payload.role,active:true});
    if(action==='member.update'){const m=server.access.members.find(m=>m.user_id===payload.userId);Object.assign(m,payload);}
    if(action==='assignment.set'){
     server.access.assignments=server.access.assignments.filter(a=>!(a.user_id===payload.userId&&a.day===payload.day&&a.shift===payload.shift));
     if(payload.enabled)server.access.assignments.push({user_id:payload.userId,day:payload.day,shift:payload.shift,shop_id:'test-shop'});
+   }
+   if(action==='shift.open'){
+    server.workspace.data.openings??=[];
+    server.workspace.data.openings=server.workspace.data.openings.filter(o=>!(o.day===payload.day&&o.shift===payload.shift));
+    server.workspace.data.openings.push(payload);
+    if(payload.staffId){
+     server.access.assignments=server.access.assignments.filter(a=>!(a.user_id===payload.staffId&&a.day===payload.day&&a.shift===payload.shift));
+     server.access.assignments.push({user_id:payload.staffId,day:payload.day,shift:payload.shift,shop_id:'test-shop'});
+    }
    }
    if(action==='proposal.submit')server.access.proposals.push({id:'proposal-new',email:user.email,payload:payload.item,reason:payload.reason,status:'pending'});
    if(action==='proposal.review'){const p=server.access.proposals.find(p=>p.id===payload.id);p.status=payload.decision;if(p.status==='approved')server.workspace.data.menu.push(p.payload);}

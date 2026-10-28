@@ -1,5 +1,5 @@
 import {buildExport,exportPage} from './data-export.js';
-import {isAdmin,canShift,canOperateShift,shiftState,reportTotals,paymentTotals,orderTotal} from './permissions.js';
+import {isAdmin,canShift,reportTotals,paymentTotals,orderTotal,closesBeforeOpen} from './permissions.js';
 import {managementPages,proposalPanel} from './management-ui.js';
 import {same} from './sync-state.js';
 import {createCloudStore,LOCAL_KEY} from './cloud-store.js';
@@ -20,7 +20,19 @@ let db=store.read();
 const money=n=>new Intl.NumberFormat('vi-VN').format(n)+' ₫';
 const dateKey=(date=new Date())=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Ho_Chi_Minh',year:'numeric',month:'2-digit',day:'2-digit'}).format(date);
 const today=dateKey();
+const toLocalInput=(date=new Date())=>{
+ const d=new Date(date);
+ const pad=n=>String(n).padStart(2,'0');
+ return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
+const fromLocalInput=str=>{
+ if(!str)return new Date().toISOString();
+ const d=new Date(str);
+ return isNaN(d.getTime())?new Date().toISOString():d.toISOString();
+};
+const timeLabel=iso=>new Date(iso).toLocaleString('vi-VN',{hour:'2-digit',minute:'2-digit',day:'2-digit',month:'2-digit'});
 let page='dashboard', shift=Number(sessionStorage.getItem('shift')||1), category='Tất cả',query='',historyQuery='',historyDate='',historyShift='', draft=null, modal=null;
+let openingShift=1, openingDay=today, quickAssignShift=1, shiftLogStaff='', shiftLogDate='';
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const normalize=s=>s.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/đ/g,'d').toLowerCase();
 const icons={dashboard:'▦',history:'◷',menu:'☷',shifts:'◴',revenue:'↗',team:'♙',audit:'☷',exports:'↓'};
@@ -38,8 +50,8 @@ const paymentLabel=o=>o.paymentMethod==='cash'?'Tiền mặt':o.paymentMethod===
 const PAYMENT_QR='/payment-qr.svg';
 const total=o=>o.items.reduce((s,i)=>s+i.price*i.qty,0);
 const orders=(day=today,s=shift)=>db.orders.filter(o=>o.day===day&&o.shift===s);
-const sessionState=(day=today,n=shift)=>shiftState(access(),db,day,n);
-const closed=()=>db.closings.some(c=>c.day===today&&c.shift===shift);
+const closed=(day=today,s=shift)=>(db.closings||[]).some(c=>c.day===day&&c.shift===s);
+const opened=(day=today,s=shift)=>(db.openings||[]).find(o=>o.day===day&&o.shift===s);
 function download(blob,name){const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 function toast(message){document.querySelector('#toast').textContent=message;document.querySelector('#toast').classList.add('show');setTimeout(()=>document.querySelector('#toast').classList.remove('show'),3000);}
 function persist(next){const result=store.persist(next);if(!result.ok)toast(result.message);db=store.read();return result.ok;}
@@ -59,15 +71,203 @@ function authScreen(){
  const state=store.status(),loading=!state.authReady;
  return `<main class="auth-screen"><section class="auth-story" aria-label="Lam An Coffee"><div class="auth-wordmark"><img src="/lam-an-logo.png" alt="Logo Lam An"><div>Lam An<small>COFFEE SHOP</small></div></div><div class="auth-story-content"><span class="eyebrow">MỘT CHÚT CÀ PHÊ, MỘT NGÀY THẬT TỐT</span><h1>Chăm chút từng ly.<br>Trọn vẹn mỗi ngày.</h1><p>Một góc nhỏ để quản lý đơn hàng,<br>đón khách và bắt đầu những ca làm thật vui.</p><div class="auth-coffee-art" aria-hidden="true"><div class="auth-saucer"></div><div class="auth-cup">✳</div><span class="auth-steam">∿</span><i>✦</i></div></div><span class="auth-story-footer">LAM AN · QUẦY BÁN HÀNG</span></section><section class="auth-entry"><div class="auth-mobile-brand"><img src="/lam-an-logo.png" alt="Lam An"><b>Lam An</b><span>COFFEE SHOP</span></div><div class="auth-card"><span class="eyebrow">CHÀO MỪNG BẠN TRỞ LẠI</span><h2>Đăng nhập</h2><p class="auth-intro">Đăng nhập để bắt đầu ca làm và quản lý quán của bạn.</p>${loading?`<div class="auth-loading" role="status"><span></span>Đang kiểm tra phiên đăng nhập…</div>`:state.configured?`${loginForm()}<p class="auth-help">Sử dụng email và mật khẩu tài khoản được quản lý quán cấp.</p>`:`<div class="note" role="alert">Ứng dụng chưa được cấu hình kết nối đăng nhập. Vui lòng liên hệ quản lý để thiết lập Supabase và triển khai lại.</div>`}<div class="auth-privacy"><span>◈</span> Dữ liệu được bảo vệ theo tài khoản của bạn</div></div><footer class="auth-footer">Lam An POS <span>Chúc bạn một ca làm thật tốt ✳</span></footer></section></main><div id="overlay-root"></div>`;
 }
-function header(){return `<aside class="sidebar"><a class="brand" href="#" aria-label="Lam An"><img class="brand-logo" src="/lam-an-logo.png" alt="Logo Lam An Coffee shop"><div>Lam An<small>COFFEE SHOP</small></div></a><div class="workspace-label">${admin()?'ADMIN · QUẢN LÝ QUÁN':'NHÂN VIÊN · CA LÀM VIỆC'}</div><nav>${navItems().map(([id,label])=>`<button class="nav-item ${page===id?'active':''}" data-page="${id}"><span>${icons[id]}</span>${label}${page===id?'<i></i>':''}</button>`).join('')}</nav><button class="sidebar-bottom cloud-indicator" data-action="cloud"><div class="local-dot"></div><div><span data-cloud-label>${cloudLabel()}</span><small data-cloud-hint>${store.hasSession()?'Dữ liệu dùng chung trong quán':'Dữ liệu riêng trên thiết bị'}</small></div><span>↗</span></button><div class="sidebar-footer">Lam An POS <span>v1.0</span></div></aside><div class="main"><header class="topbar"><div class="breadcrumb">Lam An Coffee <span>/</span> <b>${{dashboard:'Quầy bán hàng',history:'Lịch sử đơn hàng',menu:'Thực đơn',shifts:'Quản lý ca',revenue:'Doanh thu',team:'Nhân viên',audit:'Nhật ký',exports:'Xuất dữ liệu'}[page]}</b></div><div class="topbar-right"><button class="saved cloud-indicator" data-action="cloud"><i></i><span data-cloud-label>${cloudLabel()}</span></button><img class="avatar brand-avatar" src="/lam-an-logo.png" alt="Lam An"></div></header>`;}
+function header(){return `<aside class="sidebar"><a class="brand" href="#" aria-label="Lam An"><img class="brand-logo" src="/lam-an-logo.png" alt="Logo Lam An Coffee shop"><div>Lam An<small>COFFEE SHOP</small></div></a><div class="workspace-label">${admin()?'ADMIN · QUẢN LÝ QUÁN':'NHÂN VIÊN · CA ĐƯỢC PHÂN CÔNG'}</div><nav>${navItems().map(([id,label])=>`<button class="nav-item ${page===id?'active':''}" data-page="${id}"><span>${icons[id]}</span>${label}${page===id?'<i></i>':''}</button>`).join('')}</nav><button class="sidebar-bottom cloud-indicator" data-action="cloud"><div class="local-dot"></div><div><span data-cloud-label>${cloudLabel()}</span><small data-cloud-hint>${store.hasSession()?'Dữ liệu dùng chung trong quán':'Dữ liệu riêng trên thiết bị'}</small></div><span>↗</span></button><div class="sidebar-footer">Lam An POS <span>v1.0</span></div></aside><div class="main"><header class="topbar"><div class="breadcrumb">Lam An Coffee <span>/</span> <b>${{dashboard:'Quầy bán hàng',history:'Lịch sử đơn hàng',menu:'Thực đơn',shifts:'Quản lý ca',revenue:'Doanh thu',team:'Nhân viên',audit:'Nhật ký',exports:'Xuất dữ liệu'}[page]}</b></div><div class="topbar-right"><button class="saved cloud-indicator" data-action="cloud"><i></i><span data-cloud-label>${cloudLabel()}</span></button><img class="avatar brand-avatar" src="/lam-an-logo.png" alt="Lam An"></div></header>`;}
 function pageHeading(eyebrow,title,sub,action=''){return `<div class="page-heading"><div><div class="eyebrow">${eyebrow}</div><h1>${title}</h1><p>${sub}</p></div>${action}</div>`;}
 function orderCard(o){return `<button class="order-card" data-detail="${o.id}"><div class="order-card-top"><span class="order-icon">${o.customer?'♙':'▤'}</span><span class="badge ${o.status==='paid'?'paid':''}">${o.status==='cancelled'?'Đã hủy':o.status==='paid'?'Đã thanh toán':'Đang phục vụ'}</span></div><h3>${esc(o.label)}</h3><div class="order-meta">#${o.code} <span>·</span> ${new Date(o.created).toLocaleTimeString('vi-VN',{hour:'2-digit',minute:'2-digit'})}</div><div class="order-summary">${esc(o.items.map(i=>`${i.qty} ${i.name}`).join(', '))}</div><div class="order-card-bottom"><span>${o.items.reduce((s,i)=>s+i.qty,0)} món</span><strong>${money(total(o))}</strong></div></button>`;}
-function dashboard(){const list=orders(),paid=list.filter(o=>o.status==='paid'),active=list.filter(o=>o.status==='open');return `${pageHeading('MỘT NGÀY THẬT NHIỀU NĂNG LƯỢNG','Chào bạn, sẵn sàng đón khách?','Một ly cà phê ngon, một ngày làm việc trọn vẹn.',`<button class="primary" data-action="new">＋ Tạo đơn mới</button>`)}<div class="day-strip"><div>☀ <b>${new Date().toLocaleDateString('vi-VN',{weekday:'long',day:'2-digit',month:'2-digit',year:'numeric',timeZone:'Asia/Ho_Chi_Minh'})}</b></div><div class="shift-switch">${[1,2,3].map(s=>`<button data-shift="${s}" class="${shift===s?'selected':''}">Ca ${s}</button>`).join('')}</div><span class="shift-state"><i></i> ${sessionState()==='closed'?'Ca đã kết thúc':sessionState()==='open'?'Ca đang mở':'Ca chưa mở'}</span></div><div class="stats"><div class="stat"><div class="stat-label">Doanh thu ca <span>↗</span></div><div class="stat-value">${money(paid.reduce((s,o)=>s+total(o),0))}</div><small>Đã thanh toán trong ca ${shift}</small></div><div class="stat"><div class="stat-label">Tổng đơn hàng <span>▤</span></div><div class="stat-value">${list.length.toString().padStart(2,'0')} <em>đơn</em></div><small>${paid.length} đơn đã thanh toán</small></div><div class="stat"><div class="stat-label">Đang phục vụ <span>◷</span></div><div class="stat-value">${active.length.toString().padStart(2,'0')} <em>đơn</em></div><small>Cần thanh toán ${money(active.reduce((s,o)=>s+total(o),0))}</small></div></div><section><div class="section-heading"><div><h2>Đơn hàng trong ca <span>${list.length}</span></h2><p>Theo dõi và quản lý các đơn hàng của bạn</p></div><button class="secondary" data-page="shifts">${admin()?'◴ Xem ca':'◴ Mở / đóng ca'}</button></div>${list.length?`<div class="order-grid">${[...list].reverse().map(orderCard).join('')}<button class="add-card" data-action="new"><span>＋</span>Tạo đơn mới<small>Thêm một niềm vui mới</small></button></div>`:`<div class="empty-state"><div class="empty-illustration">☕<span>✦</span></div><h3>Quầy đã sẵn sàng, chờ đơn đầu tiên</h3><p>Tạo đơn mới, chọn món yêu thích và bắt đầu một ca thật tốt.</p><button class="primary" data-action="new">＋ Tạo đơn đầu tiên</button></div>`}</section><div class="gentle-note"><span>✳</span><div><b>Mọi đơn hàng đều được tự động lưu</b><p>${store.hasSession()?'Thay đổi được lưu trên máy và gửi lên Supabase. Chạm trạng thái phía trên để kiểm tra đồng bộ.':'Bạn có thể đóng trang và quay lại trên cùng trình duyệt. Đăng nhập để bật đồng bộ giữa các thiết bị.'}</p></div><span class="note-decoration">☕</span></div>`;}
+function dashboard(){
+ if(!admin()&&!allowedShift(today,shift))return `${pageHeading('CA LÀM CỦA BẠN','Chưa có ca hôm nay','Liên hệ admin để được phân ca trước khi tạo đơn.')}<div class="empty-state"><h3>Lịch phân ca</h3>${access().assignments.map(a=>`<p>${a.day} · Ca ${a.shift}</p>`).join('')||'<p>Chưa có lịch làm việc.</p>'}</div>`;
+ const list=orders(),paid=list.filter(o=>o.status==='paid'),active=list.filter(o=>o.status==='open');
+ const op=opened(today,shift);
+ const shiftStatusText=closed()?'Ca đã kết thúc':op?`Ca đang mở (từ ${new Date(op.openedAt).toLocaleTimeString('vi-VN',{hour:'2-digit',minute:'2-digit'})})`:'Ca đang mở';
+ return `${pageHeading('MỘT NGÀY THẬT NHIỀU NĂNG LƯỢNG','Chào bạn, sẵn sàng đón khách?','Một ly cà phê ngon, một ngày làm việc trọn vẹn.',`<button class="primary" data-action="new">＋ Tạo đơn mới</button>`)}<div class="day-strip"><div>☀ <b>${new Date().toLocaleDateString('vi-VN',{weekday:'long',day:'2-digit',month:'2-digit',year:'numeric',timeZone:'Asia/Ho_Chi_Minh'})}</b></div><div class="shift-switch">${[1,2,3].filter(s=>allowedShift(today,s)).map(s=>`<button data-shift="${s}" class="${shift===s?'selected':''}">Ca ${s}</button>`).join('')}</div><span class="shift-state"><i></i> ${shiftStatusText}</span></div><div class="stats"><div class="stat"><div class="stat-label">Doanh thu ca <span>↗</span></div><div class="stat-value">${money(paid.reduce((s,o)=>s+total(o),0))}</div><small>Đã thanh toán trong ca ${shift}</small></div><div class="stat"><div class="stat-label">Tổng đơn hàng <span>▤</span></div><div class="stat-value">${list.length.toString().padStart(2,'0')} <em>đơn</em></div><small>${paid.length} đơn đã thanh toán</small></div><div class="stat"><div class="stat-label">Đang phục vụ <span>◷</span></div><div class="stat-value">${active.length.toString().padStart(2,'0')} <em>đơn</em></div><small>Cần thanh toán ${money(active.reduce((s,o)=>s+total(o),0))}</small></div></div><section><div class="section-heading"><div><h2>Đơn hàng trong ca <span>${list.length}</span></h2><p>Theo dõi và quản lý các đơn hàng của bạn</p></div><button class="secondary" data-page="shifts">◴ Kết ca</button></div>${list.length?`<div class="order-grid">${[...list].reverse().map(orderCard).join('')}<button class="add-card" data-action="new"><span>＋</span>Tạo đơn mới<small>Thêm một niềm vui mới</small></button></div>`:`<div class="empty-state"><div class="empty-illustration">☕<span>✦</span></div><h3>Quầy đã sẵn sàng, chờ đơn đầu tiên</h3><p>Tạo đơn mới, chọn món yêu thích và bắt đầu một ca thật tốt.</p><button class="primary" data-action="new">＋ Tạo đơn đầu tiên</button></div>`}</section><div class="gentle-note"><span>✳</span><div><b>Mọi đơn hàng đều được tự động lưu</b><p>${store.hasSession()?'Thay đổi được lưu trên máy và gửi lên Supabase. Chạm trạng thái phía trên để kiểm tra đồng bộ.':'Bạn có thể đóng trang và quay lại trên cùng trình duyệt. Đăng nhập để bật đồng bộ giữa các thiết bị.'}</p></div><span class="note-decoration">☕</span></div>`;
+}
 function menuCards(edit=false){const list=db.menu.filter(m=>(category==='Tất cả'||m.category===category)&&normalize(m.name).includes(normalize(query)));return `<div class="category-tabs">${['Tất cả',...new Set(db.menu.map(m=>m.category))].map(c=>`<button data-category="${esc(c)}" class="${category===c?'selected':''}">${esc(c)}</button>`).join('')}</div><div class="menu-grid">${list.map((m,i)=>`<button class="menu-card" ${edit?`data-edit-menu="${m.id}"`:`data-add="${m.id}"`}><div class="drink-art art-${['Cà phê','Trà','Nước ép','Sinh tố','Đá xay & Yaourt','Soda & Khác'].indexOf(m.category)}"><div class="drink-cup"><span></span></div><i>✦</i></div><div class="menu-card-info"><small>${esc(m.category)}</small><h3>${esc(m.name)}</h3><div><b>${money(m.price)}</b><span class="menu-plus">${edit?'✎':'＋'}</span></div></div></button>`).join('')}</div>${list.length?'':`<div class="mini-empty">Không tìm thấy món “${esc(query)}”<button class="secondary" data-action="add-menu">＋ Thêm món & giá</button></div>`}`;}
 function menuPage(){return `${pageHeading('HƯƠNG VỊ NHÀ LAM AN','Thực đơn','Những món quen thuộc, sẵn sàng cho từng đơn hàng.',`<button class="primary" data-action="add-menu">＋ Thêm món mới</button>`)}<div class="search-wrap"><span>⌕</span><input id="menu-search" placeholder="Tìm tên món trong thực đơn…" value="${esc(query)}" aria-label="Tìm món"></div><div id="menu-results">${menuCards(true)}</div><p class="muted">Giá được tham khảo từ menu quán · Chạm vào món để chỉnh sửa tên và giá.</p>${proposalPanel(access(),esc,money)}`;}
 function history(){let list=db.orders.filter(o=>(!historyDate||o.day===historyDate)&&(!historyShift||o.shift===Number(historyShift))&&normalize(`${o.label} ${o.code} ${o.items.map(i=>i.name).join(' ')}`).includes(normalize(historyQuery))).sort((a,b)=>b.created.localeCompare(a.created));return `${pageHeading('MỖI ĐƠN HÀNG, MỘT CÂU CHUYỆN','Lịch sử đơn hàng','Tìm lại đơn hàng theo tên khách, số đơn hoặc món đã gọi.',admin()?`<button class="secondary" data-action="open-export">↓ Xuất dữ liệu</button>`:'')}<div class="history-filters"><div class="search-wrap"><span>⌕</span><input id="history-search" placeholder="Tìm khách hàng, số đơn, món…" aria-label="Tìm đơn hàng" value="${esc(historyQuery)}"></div><input type="date" id="history-date" aria-label="Ngày đơn hàng" value="${historyDate}"><select id="history-shift" aria-label="Lọc ca"><option value="">Tất cả ca</option>${[1,2,3].map(s=>`<option value="${s}" ${historyShift==s?'selected':''}>Ca ${s}</option>`).join('')}</select></div><div class="section-heading"><h2>${list.length} đơn hàng</h2><span class="muted">Đã thanh toán: ${money(list.filter(o=>o.status==='paid').reduce((s,o)=>s+total(o),0))}</span></div>${list.length?`<div class="history-list">${list.map(o=>`<button class="history-row" data-detail="${o.id}"><span class="order-icon">▤</span><div><h3>${esc(o.label)}</h3><small>#${o.code} · ${o.day.split('-').reverse().join('/')} · Ca ${o.shift}</small></div><span class="history-items">${esc(o.items.map(i=>`${i.qty} ${i.name}`).join(', '))}</span><span class="badge ${o.status==='paid'?'paid':''}">${o.status==='cancelled'?'Đã hủy':o.status==='paid'?`Đã thanh toán · ${paymentLabel(o)}`:'Đang phục vụ'}</span><strong>${money(total(o))}</strong><span>›</span></button>`).join('')}</div>`:'<div class="empty-state compact"><div class="empty-illustration">◷</div><h3>Chưa có đơn hàng phù hợp</h3><p>Các đơn hàng đã lưu sẽ xuất hiện ở đây.</p></div>'}`;}
-function shiftsPage(){const dayOrders=db.orders.filter(o=>o.day===today),dayClosings=db.closings.filter(c=>c.day===today),r=reportTotals(dayOrders,dayClosings);return `${pageHeading('GỌN GÀNG SAU MỖI CA','Quản lý ca làm việc',admin()?'Đối chiếu tiền thực thu và quản lý cả ba ca.':'Chọn ca để tự mở và đóng ca hôm nay.')}<div class="daily-total"><div><span>${admin()?'TỔNG DOANH THU HÔM NAY':'DOANH THU CÁC CA ĐƯỢC PHÂN CÔNG'}</span><h2>${money(r.revenue)}</h2><p>${dayOrders.length} đơn · ${r.cancelled} đơn hủy · ${today.split('-').reverse().join('/')}</p></div><span>◴</span></div><div class="shift-grid">${[1,2,3].map(n=>{const list=orders(today,n),closing=db.closings.find(c=>c.day===today&&c.shift===n),r=reportTotals(list,closing?[closing]:[]);return `<div class="shift-card"><div class="section-heading"><h2>Ca ${n}</h2><span class="badge ${closing?'paid':''}">${closing?'Đã kết ca':sessionState(today,n)==='open'?'Đang mở':'Chưa mở'}</span></div><div class="shift-amount">${money(r.revenue)}</div><p>${list.length} đơn · ${list.filter(o=>o.status==='open').length} chưa thanh toán</p>${closing?`<div class="closing-time">Kết lúc ${new Date(closing.at).toLocaleTimeString('vi-VN',{hour:'2-digit',minute:'2-digit'})}<br>Doanh thu đã chốt: ${money(closing.revenue)}${closing.originalRevenue!==undefined?`<br>Đã điều chỉnh · Gốc: ${money(closing.originalRevenue)}`:''}<br>Tiền mặt thực đếm: ${closing.actualCash==null?'Chưa đối chiếu':money(closing.actualCash)}<br>Chênh lệch: ${closing.discrepancy==null?'—':money(closing.discrepancy)}<br>${esc(closing.closedByEmail||'Dữ liệu cũ')}</div>${admin()?`<button class="secondary full" data-adjust-shift="${n}" data-day="${today}">Điều chỉnh ca</button>`:''}`:admin()?'<p class="muted">Nhân viên tự mở và đóng ca.</p>':sessionState(today,n)==='open'?`<button class="secondary full" data-close-shift="${n}">Kết ca ${n} ↗</button><p class="muted">Mở bởi ${esc(access().shiftSessions?.find(s=>s.day===today&&s.shift===n)?.opened_by_email||'nhân viên')}</p>`:`<button class="primary full" data-open-shift="${n}">Mở ca ${n}</button>`}</div>`;}).join('')||'<p class="note">Chưa có ca được phân công hôm nay.</p>'}</div><div class="section-heading"><h2>Lịch sử kết ca</h2></div><div class="history-list">${[...db.closings].reverse().map(c=>`<div class="closing-row"><div><b>Ca ${c.shift}</b><small>${c.day.split('-').reverse().join('/')}</small>${c.originalRevenue!==undefined?`<small>Đã điều chỉnh từ ${money(c.originalRevenue)}</small>`:''}<small>${esc(c.closedByEmail||'Dữ liệu cũ')}</small></div><span>${c.count} đơn đã thanh toán</span><strong>${money(c.revenue)}</strong>${admin()?`<button class="secondary" data-adjust-shift="${c.shift}" data-day="${c.day}">Điều chỉnh</button>`:''}</div>`).join('')||'<div class="mini-empty">Chưa có ca nào được kết.</div>'}</div>`;}
-function closeShiftDialog(){const list=orders(today,closingShift),open=list.filter(o=>o.status==='open'),r=reportTotals(list,[]);return `<div class="small-dialog"><div class="dialog-heading"><h2>Kết ca ${closingShift}</h2><button class="icon-button" data-action="dismiss" aria-label="Đóng">×</button></div><p class="muted">${today} · Kiểm tra tiền thực thu trước khi kết ca.</p><div class="cart-grand"><span>Doanh thu ca</span><strong>${money(r.revenue)}</strong></div><p>${list.length} đơn hàng · ${r.paid} đã thanh toán · ${r.cancelled} hủy</p>${open.length?`<p class="warning">Còn ${open.length} đơn chưa thanh toán. Vui lòng thanh toán trước khi kết ca.</p><button class="secondary full" data-action="go-open">Xem đơn chưa thanh toán</button>`:`<p class="note">Tiền mặt hệ thống: ${money(r.cash)}<br>Chuyển khoản: ${money(r.transfer)}</p><label>Tiền mặt thực đếm (VNĐ)<input id="close-actual-cash" type="number" min="0" step="1000" value="${Math.max(0,r.cash)}"></label><label>Ghi chú đối chiếu<input id="close-note" maxlength="300" placeholder="Bắt buộc nếu tiền mặt chênh lệch"></label><p class="muted">Ca đã kết không nhận đơn mới. Đồng bộ các thiết bị trước khi chốt.</p><button class="primary full" data-action="confirm-close">Xác nhận kết ca</button>`}</div>`;}
+function shiftsPage(){
+ const dayOrders=db.orders.filter(o=>o.day===today),dayClosings=(db.closings||[]).filter(c=>c.day===today),r=reportTotals(dayOrders,dayClosings);
+ return `${pageHeading('GỌN GÀNG SAU MỖI CA','Quản lý ca làm việc',admin()?'Phân công ca, mở ca, kết ca thay cho nhân viên và quản lý cả ba ca.':'Mở ca và kết ca theo thời gian thực hoặc điều chỉnh thời gian.')}
+ <div class="daily-total">
+  <div>
+   <span>${admin()?'TỔNG DOANH THU HÔM NAY':'DOANH THU CÁC CA ĐƯỢC PHÂN CÔNG'}</span>
+   <h2>${money(r.revenue)}</h2>
+   <p>${dayOrders.length} đơn · ${r.cancelled} đơn hủy · ${today.split('-').reverse().join('/')}</p>
+  </div>
+  <span>◴</span>
+ </div>
+ <div class="shift-grid">
+  ${[1,2,3].filter(n=>allowedShift(today,n)).map(n=>{
+   const list=orders(today,n),
+         closing=(db.closings||[]).find(c=>c.day===today&&c.shift===n),
+         opening=(db.openings||[]).find(o=>o.day===today&&o.shift===n),
+         r=reportTotals(list,closing?[closing]:[]),
+         assigned=(access()?.assignments||[]).filter(a=>a.day===today&&Number(a.shift)===n),
+         assignedMembers=assigned.map(a=>(access()?.members||[]).find(m=>m.user_id===a.user_id)).filter(Boolean),
+         assignedNames=assignedMembers.map(m=>m.display_name||m.email).join(', ');
+   const statusBadge=closing
+    ? '<span class="badge paid">Đã kết ca</span>'
+    : opening
+    ? '<span class="badge active-shift">Đang mở</span>'
+    : '<span class="badge muted-badge">Chưa mở</span>';
+   return `<div class="shift-card">
+    <div class="section-heading">
+     <h2>Ca ${n}</h2>
+     ${statusBadge}
+    </div>
+    <div class="shift-assigned"><b>Phụ trách:</b> ${esc(assignedNames||(opening?.staffName||'Chưa phân công'))}</div>
+    <div class="shift-amount">${money(r.revenue)}</div>
+    <p>${list.length} đơn · ${list.filter(o=>o.status==='open').length} chưa thanh toán</p>
+    ${closing?`
+     <div class="closing-time">
+      ${closing.openedAt?`Mở lúc ${new Date(closing.openedAt).toLocaleTimeString('vi-VN',{hour:'2-digit',minute:'2-digit'})}<br>`:''}
+      Kết lúc ${new Date(closing.at).toLocaleTimeString('vi-VN',{hour:'2-digit',minute:'2-digit'})}<br>
+      Doanh thu đã chốt: ${money(closing.revenue)}
+      ${closing.originalRevenue!==undefined?`<br>Đã điều chỉnh · Gốc: ${money(closing.originalRevenue)}`:''}
+      <br>Tiền mặt thực đếm: ${closing.actualCash==null?'Chưa đối chiếu':money(closing.actualCash)}
+      <br>Chênh lệch: ${closing.discrepancy==null?'—':money(closing.discrepancy)}
+      <br>${esc(closing.closedByEmail||'Dữ liệu cũ')}
+      ${closing.closedForEmail&&closing.closedForEmail!==closing.closedByEmail?`<br>Kết thay cho: <b>${esc(closing.closedForEmail)}</b>`:''}
+     </div>
+     ${admin()?`<button class="secondary full" data-adjust-shift="${n}" data-day="${today}">Điều chỉnh ca</button>`:''}
+    `:`
+     ${opening?`
+      <div class="closing-time">
+       Mở lúc ${new Date(opening.openedAt).toLocaleTimeString('vi-VN',{hour:'2-digit',minute:'2-digit'})} · ${esc(opening.openedByEmail||'')}
+       ${opening.staffEmail&&opening.staffEmail!==opening.openedByEmail?`<br>Mở thay cho: <b>${esc(opening.staffEmail)}</b>`:''}
+       ${opening.initialCash?`<br>Tiền mặt đầu ca: ${money(opening.initialCash)}`:''}
+       ${opening.note?`<br>Ghi chú: ${esc(opening.note)}`:''}
+      </div>
+      <button class="primary full" data-close-shift="${n}">${admin()&&opening.staffEmail&&opening.staffEmail!==actor().email?`Kết ca ${n} thay nhân viên ↗`:`Kết ca ${n} ↗`}</button>
+      <button class="secondary full mt-1" data-adjust-open-shift="${n}" data-day="${today}">Điều chỉnh giờ mở ca</button>
+     `:`
+      <button class="primary full" data-open-shift="${n}">${admin()?`Mở ca ${n} (hoặc thay NV) ↗`:`Mở ca ${n} ↗`}</button>
+      <button class="secondary full mt-1" data-close-shift="${n}">Kết ca ${n} ↗</button>
+      ${admin()?`<button class="secondary full mt-1" data-quick-assign="${n}" data-day="${today}">Phân công ca ${n}</button>`:''}
+     `}
+    `}
+   </div>`;
+  }).join('')||'<p class="note">Chưa có ca được phân công hôm nay.</p>'}
+ </div>
+ ${shiftLog()}`;
+}
+function shiftLog(){
+ const key=r=>`${r.day}:${r.shift}`,rows=new Map();
+ for(const op of db.openings||[])rows.set(key(op),{day:op.day,shift:op.shift,op});
+ for(const c of db.closings||[])rows.set(key(c),{...(rows.get(key(c))||{day:c.day,shift:c.shift}),c});
+ const list=[...rows.values()].map(({day,shift,op,c})=>({day,shift,op,c,
+  staffId:op?.staffId||c?.closedForId||'',
+  staffName:op?.staffName||c?.closedForName||c?.closedForEmail||'Chưa rõ nhân viên',
+  openedAt:op?.openedAt||c?.openedAt||null,
+  openedBy:op?.openedByEmail||c?.openedByEmail||''}))
+  .filter(r=>(!shiftLogStaff||r.staffId===shiftLogStaff)&&(!shiftLogDate||r.day===shiftLogDate))
+  .sort((a,b)=>b.day.localeCompare(a.day)||b.shift-a.shift);
+ const duration=(from,to)=>{const m=Math.round((new Date(to)-new Date(from))/60000);return `${Math.floor(m/60)} giờ ${m%60} phút`;};
+ return `<div class="section-heading"><div><h2>Lịch sử mở / kết ca <span>${list.length}</span></h2><p>${admin()?'Theo dõi giờ mở và kết ca của từng nhân viên.':'Các ca bạn được phân công.'}</p></div></div>
+ <div class="history-filters">
+  ${admin()?`<select id="shift-log-staff" aria-label="Lọc theo nhân viên"><option value="">Tất cả nhân viên</option>${(access()?.members||[]).map(m=>`<option value="${m.user_id}" ${shiftLogStaff===m.user_id?'selected':''}>${esc(m.display_name||m.email)}</option>`).join('')}</select>`:''}
+  <input type="date" id="shift-log-date" aria-label="Lọc ngày mở ca" value="${shiftLogDate}">
+ </div>
+ <div class="history-list">
+  ${list.map(({day,shift,op,c,staffName,openedAt,openedBy})=>`<div class="closing-row shift-log-row">
+   <div>
+    <b>Ca ${shift} · ${day.split('-').reverse().join('/')}</b>
+    <small>Nhân viên: <b>${esc(staffName)}</b></small>
+    <small>Mở: ${openedAt?`${timeLabel(openedAt)}${openedBy?` · ${esc(openedBy)}`:''}`:'Không ghi nhận'}</small>
+    <small>Kết: ${c?.at?`${timeLabel(c.at)} · ${esc(c.closedByEmail||'Dữ liệu cũ')}`:'Chưa kết ca'}</small>
+    ${c?.originalRevenue!==undefined?`<small>Đã điều chỉnh từ ${money(c.originalRevenue)}</small>`:''}
+   </div>
+   <span>${c?'<span class="badge paid">Đã kết ca</span>':'<span class="badge active-shift">Đang mở</span>'}${openedAt&&c?.at?`<small>${duration(openedAt,c.at)}</small>`:''}</span>
+   <strong>${c?money(c.revenue):'—'}</strong>
+   ${admin()&&c?`<button class="secondary" data-adjust-shift="${shift}" data-day="${day}">Điều chỉnh</button>`:''}
+  </div>`).join('')||'<div class="mini-empty">Chưa có lịch sử mở / kết ca.</div>'}
+ </div>`;
+}
+function openShiftDialog(){
+ const existingOpening=(db.openings||[]).find(o=>o.day===openingDay&&o.shift===openingShift);
+ return `<div class="small-dialog">
+  <div class="dialog-heading">
+   <h2>${existingOpening?'Điều chỉnh giờ mở':'Mở'} ca ${openingShift}</h2>
+   <button class="icon-button" data-action="dismiss" aria-label="Đóng">×</button>
+  </div>
+  <p class="muted">${openingDay} · Bắt đầu ca làm việc.</p>
+  ${admin()?`
+   <label>Nhân viên phụ trách ca
+    <select id="open-shift-staff">
+     <option value="${actor().id}">Chính tôi (${esc(actor().email)})</option>
+     ${(access()?.members||[]).filter(m=>m.active&&m.user_id!==actor().id).map(m=>`<option value="${m.user_id}" ${existingOpening?.staffId===m.user_id?'selected':''}>${esc(m.display_name||m.email)} (${m.role==='admin'?'Admin':'Nhân viên'})</option>`).join('')}
+    </select>
+   </label>
+   <p class="muted">Quản lý có thể mở ca thay cho nhân viên. Nếu nhân viên chưa được phân ca, hệ thống sẽ tự động phân ca cho nhân viên đó.</p>
+  `:''}
+  <label>Thời gian mở ca
+   <div class="time-input-group">
+    <input type="datetime-local" id="open-shift-time" value="${toLocalInput(existingOpening?.openedAt||new Date())}" required>
+    <button type="button" class="secondary" data-action="set-now-open">Hiện tại</button>
+   </div>
+  </label>
+  <p class="muted">Mặc định theo thời gian thực. Bạn có thể điều chỉnh thời gian nếu mở ca bù hoặc vào ca sớm/muộn.</p>
+  <label>Tiền mặt đầu ca (VNĐ)
+   <input id="open-initial-cash" type="number" min="0" step="1000" value="${existingOpening?.initialCash||0}">
+  </label>
+  <label>Ghi chú mở ca
+   <input id="open-shift-note" maxlength="300" placeholder="Ghi chú (không bắt buộc)" value="${esc(existingOpening?.note||'')}">
+  </label>
+  <button class="primary full" data-action="confirm-open-shift">${existingOpening?'Lưu thay đổi thời gian':(admin()?'Xác nhận mở ca':'Bắt đầu mở ca')} ↗</button>
+ </div>`;
+}
+function quickAssignDialog(){
+ return `<div class="small-dialog">
+  <div class="dialog-heading">
+   <h2>Phân công ca ${quickAssignShift}</h2>
+   <button class="icon-button" data-action="dismiss" aria-label="Đóng">×</button>
+  </div>
+  <p class="muted">${today} · Chọn nhân viên làm việc trong ca này.</p>
+  <label>Nhân viên
+   <select id="quick-assign-staff">
+    ${(access()?.members||[]).filter(m=>m.active).map(m=>`<option value="${m.user_id}">${esc(m.display_name||m.email)} (${m.role==='admin'?'Admin':'Nhân viên'})</option>`).join('')}
+   </select>
+  </label>
+  <button class="primary full" data-action="confirm-quick-assign">Xác nhận phân ca</button>
+ </div>`;
+}
+function closeShiftDialog(){
+ const list=orders(today,closingShift),open=list.filter(o=>o.status==='open'),r=reportTotals(list,[]);
+ const op=(db.openings||[]).find(o=>o.day===today&&o.shift===closingShift);
+ return `<div class="small-dialog">
+  <div class="dialog-heading">
+   <h2>Kết ca ${closingShift}</h2>
+   <button class="icon-button" data-action="dismiss" aria-label="Đóng">×</button>
+  </div>
+  <p class="muted">${today} · Kiểm tra tiền thực thu trước khi kết ca.</p>
+  <div class="cart-grand"><span>Doanh thu ca</span><strong>${money(r.revenue)}</strong></div>
+  <p>${list.length} đơn hàng · ${r.paid} đã thanh toán · ${r.cancelled} hủy</p>
+  ${open.length?`
+   <p class="warning">Còn ${open.length} đơn chưa thanh toán. Vui lòng thanh toán trước khi kết ca.</p>
+   <button class="secondary full" data-action="go-open">Xem đơn chưa thanh toán</button>
+  `:`
+   ${admin()?`
+    <label>Kết ca thay cho nhân viên
+     <select id="close-shift-staff">
+      <option value="${op?.staffId||actor().id}">${op?.staffEmail?`${esc(op.staffEmail)} (phụ trách ca)`:`Chính tôi (${esc(actor().email)})`}</option>
+      ${(access()?.members||[]).filter(m=>m.active&&m.user_id!==op?.staffId&&m.user_id!==actor().id).map(m=>`<option value="${m.user_id}">${esc(m.display_name||m.email)} (${m.role==='admin'?'Admin':'Nhân viên'})</option>`).join('')}
+     </select>
+    </label>
+   `:''}
+   <label>Thời gian kết ca
+    <div class="time-input-group">
+     <input type="datetime-local" id="close-shift-time" value="${toLocalInput(new Date())}" ${op?.openedAt?`min="${toLocalInput(op.openedAt)}"`:''} required>
+     <button type="button" class="secondary" data-action="set-now-close">Hiện tại</button>
+    </div>
+   </label>
+   <p class="muted">Mặc định theo thời gian thực. Bạn có thể điều chỉnh thời gian nếu kết ca muộn hoặc kết ca bù.${op?.openedAt?` Không được trước giờ mở ca (${timeLabel(op.openedAt)}).`:''}</p>
+   <p class="note">Tiền mặt hệ thống: ${money(r.cash)}<br>Chuyển khoản: ${money(r.transfer)}${op?.initialCash?`<br>Tiền mặt đầu ca: ${money(op.initialCash)}`:''}</p>
+   <label>Tiền mặt thực đếm (VNĐ)<input id="close-actual-cash" type="number" min="0" step="1000" value="${Math.max(0,r.cash)}"></label>
+   <label>Ghi chú đối chiếu<input id="close-note" maxlength="300" placeholder="Bắt buộc nếu tiền mặt chênh lệch"></label>
+   <p class="muted">Ca đã kết không nhận đơn mới. Đồng bộ các thiết bị trước khi chốt.</p>
+   <button class="primary full" data-action="confirm-close">Xác nhận kết ca</button>
+  `}
+ </div>`;
+}
 function cancelDialog(){const o=db.orders.find(o=>o.id===detailId);if(!o)return '';return `<form id="cancel-form" class="small-dialog"><div class="dialog-heading"><h2>Hủy đơn ${esc(o.label)}</h2><button type="button" class="icon-button" data-action="dismiss" aria-label="Đóng">×</button></div><p class="muted">Đơn và lịch sử vẫn được giữ lại. Đơn hủy được loại khỏi doanh thu.</p><label>Lý do hủy<input name="reason" required minlength="3" maxlength="300" placeholder="Nhập lý do"></label>${o.status==='paid'?`<p class="warning">Cần hoàn ${money(total(o))} theo các phương thức đã thu.</p><label class="check-label"><input name="refund" type="checkbox" required> Đã hoàn đủ tiền cho khách</label>`:''}<button class="primary full" type="submit">Xác nhận hủy đơn</button></form>`;}
 function adjustDialog(){return `<form id="adjust-form" class="small-dialog"><div class="dialog-heading"><h2>Điều chỉnh ca ${adjustTarget.shift}</h2><button type="button" class="icon-button" data-action="dismiss" aria-label="Đóng">×</button></div><p class="muted">${adjustTarget.day} · Giữ báo cáo gốc và lưu người điều chỉnh.</p><label>Số tiền điều chỉnh (VNĐ)<input name="amount" type="number" required step="1000" placeholder="Dương để tăng, âm để giảm"></label><label>Phương thức<select name="method"><option value="cash">Tiền mặt</option><option value="transfer">Chuyển khoản</option></select></label><label>Lý do<input name="reason" required minlength="3" maxlength="300"></label><button class="primary full" type="submit">Lưu điều chỉnh</button></form>`;}
 
@@ -77,17 +277,19 @@ function editOrder(id){
  if(!order||order.status==='cancelled'||!allowedShift(order.day,order.shift)){toast('Không có quyền sửa đơn này.');return;}
  editOriginal=structuredClone(order);draft=structuredClone(order);draft.editReason='';draft.settlement=null;category='Tất cả';query='';modal='order';renderOverlay();
 }
-function newOrder(){if(!allowedShift(today,shift)){toast('Hãy mở ca trước khi tạo đơn.');page='shifts';render();return;}if(sessionState()==='pending'){toast('Nhân viên cần mở ca trước khi tạo đơn.');page='shifts';render();return;}if(closed()){toast('Ca này đã kết thúc. Hãy chọn một ca đang mở.');return;}draft={table:'1',customer:'',note:'',items:[]};category='Tất cả';query='';modal='order';renderOverlay();}
+function newOrder(){if(!allowedShift(today,shift)){toast('Bạn chưa được phân công ca này.');return;}if(closed()){toast('Ca này đã kết thúc. Hãy chọn một ca đang mở.');return;}draft={table:'1',customer:'',note:'',items:[]};category='Tất cả';query='';modal='order';renderOverlay();}
 function renderOverlay(){let root=document.querySelector('#overlay-root');if(!modal){root.innerHTML='';return;}let body='';
 if(modal==='cloud')body=cloudDialog();
 if(modal==='password')body=`<form class="small-dialog" id="password-form"><div class="dialog-heading"><h2>Đổi mật khẩu</h2><button type="button" class="icon-button" data-action="dismiss" aria-label="Đóng">×</button></div><label>Mật khẩu mới<input name="password" type="password" required minlength="8" autocomplete="new-password"></label><button type="submit" class="primary full">Lưu mật khẩu</button></form>`;
 if(modal==='order')body=`<div class="order-dialog"><div class="dialog-heading"><div><div class="eyebrow">${draft.id?'SỬA ĐƠN #'+esc(draft.code):'QUẦY BÁN HÀNG'} · CA ${draft.shift||shift}</div><h2>${draft.id?'Sửa đơn hàng':'Tạo đơn mới'}</h2></div><button class="icon-button" data-action="dismiss" aria-label="Đóng">×</button></div><div class="order-layout"><div class="order-menu"><div class="search-line"><div class="search-wrap"><span>⌕</span><input id="order-search" placeholder="Tìm món, ví dụ: cà phê sữa…" aria-label="Tìm món cho đơn" value="${esc(query)}"></div><button class="secondary" data-action="add-menu">＋ Thêm món</button></div><div id="order-results">${menuCards()}</div></div><div class="cart"><h3>Thông tin đơn hàng <span class="badge">Ca ${draft.shift||shift}</span></h3><label>Bàn / Số order<input id="table-input" value="${esc(draft.table)}" placeholder="Nhập số hoặc tên bàn" maxlength="60"></label><div class="table-picker">${Array.from({length:15},(_,i)=>`<button data-table="${i+1}" class="${draft.table==i+1?'selected':''}">${i+1}</button>`).join('')}</div><label>Tên khách hàng <small>(không bắt buộc)</small><input id="customer-input" value="${esc(draft.customer)}" placeholder="Ví dụ: Chị Linh" maxlength="100"></label>${draft.id?`<p class="note">Giữ nguyên ngày, ca và trạng thái thanh toán. Nếu ca đã kết, báo cáo sẽ được cập nhật và lưu dấu chỉnh sửa.${draft.status==='paid'?' Đơn đã thanh toán: hãy thu thêm hoặc hoàn lại tiền chênh lệch cho khách nếu tổng tiền thay đổi.':''}</p>`:''}<div class="cart-divider"></div><div id="cart-items">${cartItems()}</div><label>Ghi chú<input id="note-input" value="${esc(draft.note)}" placeholder="Ít đá, ít đường…" maxlength="300"></label><div id="paid-edit-fields">${paidEditFields()}</div><div id="cart-total">${cartTotal()}</div><button class="primary full" data-action="save-order">${draft.id?'Lưu thay đổi':'Lưu đơn hàng'} <span>↗</span></button><p class="cart-hint">${store.hasSession()?'Lưu trên máy và đồng bộ vào tài khoản':'Đơn được lưu trên thiết bị này'}</p></div></div></div>`;
 if(modal==='menu')body=`<form id="menu-form" class="small-dialog"><div class="dialog-heading"><h2>${admin()?(editingMenu?'Chỉnh sửa món':'Thêm món mới'):'Đề xuất cập nhật menu'}</h2><button type="button" class="icon-button" data-action="back-menu" aria-label="Đóng">×</button></div><p class="muted">${admin()?'Món sẽ được lưu vào thực đơn để dùng cho lần sau.':'Admin duyệt đề xuất trước khi cập nhật thực đơn dùng chung.'}</p><label>Tên món<input name="name" required maxlength="100" value="${esc(editingMenu?.name||query)}" placeholder="Ví dụ: Cà phê kem"></label><label>Giá bán (VNĐ)<input name="price" required type="number" min="1000" max="10000000" step="1000" value="${editingMenu?.price||''}" placeholder="25000"></label><label>Nhóm món<select name="category">${[...new Set(db.menu.map(m=>m.category))].map(c=>`<option ${editingMenu?.category===c?'selected':''}>${esc(c)}</option>`).join('')}</select></label>${!admin()?`<label>Lý do đề xuất<input name="reason" required minlength="3" maxlength="300" placeholder="Vì sao cần cập nhật món?"></label>`:''}<button class="primary full" type="submit">${admin()?(editingMenu?'Lưu thay đổi':'Thêm vào thực đơn'):'Gửi đề xuất'}</button></form>`;
 if(modal==='detail'){const o=db.orders.find(x=>x.id===detailId);if(!o){modal=null;return renderOverlay();}body=orderDetail(o);}
+if(modal==='open-shift')body=openShiftDialog();
+if(modal==='quick-assign')body=quickAssignDialog();
 if(modal==='close-shift')body=closeShiftDialog();
 if(modal==='cancel')body=cancelDialog();
 if(modal==='adjust')body=adjustDialog();
-root.innerHTML=`<div class="overlay" role="dialog" aria-modal="true" aria-label="${modal==='order'?'Tạo đơn mới':modal==='menu'?'Thông tin món':modal==='detail'?'Chi tiết đơn':modal==='cloud'?'Lưu trữ và đồng bộ':'Kết ca'}">${body}</div>`;
+root.innerHTML=`<div class="overlay" role="dialog" aria-modal="true" aria-label="${modal==='order'?'Tạo đơn mới':modal==='menu'?'Thông tin món':modal==='detail'?'Chi tiết đơn':modal==='cloud'?'Lưu trữ và đồng bộ':'Quản lý ca'}">${body}</div>`;
 }
 function paidEditFields(){
  if(draft?.status!=='paid')return '';
@@ -114,6 +316,9 @@ if(b.dataset.detail){detailId=b.dataset.detail;paymentMethod='cash';modal='detai
 if(b.dataset.paymentMethod){paymentMethod=b.dataset.paymentMethod;renderOverlay();}
 if(b.dataset.editOrder){editOrder(b.dataset.editOrder);}
 if(b.dataset.editMenu){editingMenu=db.menu.find(x=>x.id===b.dataset.editMenu);modal='menu';renderOverlay();}
+if(b.dataset.openShift){openingShift=Number(b.dataset.openShift);openingDay=today;modal='open-shift';renderOverlay();}
+if(b.dataset.adjustOpenShift){openingShift=Number(b.dataset.adjustOpenShift);openingDay=b.dataset.day||today;modal='open-shift';renderOverlay();}
+if(b.dataset.quickAssign){quickAssignShift=Number(b.dataset.quickAssign);modal='quick-assign';renderOverlay();}
 if(b.dataset.pay){
  const order=db.orders.find(o=>o.id===b.dataset.pay);
  if(!order||!allowedShift(order.day,order.shift)||order.status!=='open'||!['cash','transfer'].includes(paymentMethod))return;
@@ -126,8 +331,7 @@ if(b.dataset.memberToggle&&admin())await manage('member.update',{userId:b.datase
 if(b.dataset.memberRole&&admin()){if(!confirm('Xác nhận đổi vai trò tài khoản này?'))return;await manage('member.update',{userId:b.dataset.memberRole,role:b.dataset.role});}
 if(b.dataset.unassign&&admin())await manage('assignment.set',{userId:b.dataset.unassign,day:b.dataset.day,shift:Number(b.dataset.shiftNumber),enabled:false});
 if(b.dataset.proposalReview&&admin())await manage('proposal.review',{id:b.dataset.proposalReview,decision:b.dataset.decision});
-if(b.dataset.openShift){const n=Number(b.dataset.openShift);if(access()?.role!=='staff')return;await manage('shift.open',{day:today,shift:n});}
-if(b.dataset.closeShift){if(!canOperateShift(access(),today,Number(b.dataset.closeShift))||sessionState(today,Number(b.dataset.closeShift))!=='open')return;closingShift=Number(b.dataset.closeShift);modal='close-shift';renderOverlay();}
+if(b.dataset.closeShift){if(!allowedShift(today,Number(b.dataset.closeShift)))return;closingShift=Number(b.dataset.closeShift);modal='close-shift';renderOverlay();}
 switch(b.dataset.action){
 case 'toggle-password':{const input=document.querySelector('#login-password');if(!input)return;const visible=input.type==='password';input.type=visible?'text':'password';b.textContent=visible?'Ẩn':'Hiện';b.setAttribute('aria-label',visible?'Ẩn mật khẩu':'Hiện mật khẩu');b.setAttribute('aria-pressed',String(visible));break;}
 case 'change-password':modal='password';renderOverlay();break;
@@ -139,6 +343,50 @@ case 'cloud-remote':{if(!confirm('Dùng bản trên database? Thay đổi chưa 
 case 'new':newOrder();break;case 'dismiss':{if(modal==='order'&&draft.items.length&&!confirm('Đóng đơn đang soạn? Các thay đổi chưa lưu sẽ bị bỏ.'))return;const editing=modal==='order'&&draft?.id;if(editing)detailId=draft.id;modal=editing?'detail':null;draft=null;render();break;}
 case 'add-menu':editingMenu=null;modal='menu';renderOverlay();break;
 case 'back-menu':modal=draft?'order':null;renderOverlay();break;
+case 'set-now-open':{const input=document.querySelector('#open-shift-time');if(input)input.value=toLocalInput(new Date());break;}
+case 'set-now-close':{const input=document.querySelector('#close-shift-time');if(input)input.value=toLocalInput(new Date());break;}
+case 'confirm-quick-assign':{
+ if(!admin())return;
+ const staffId=document.querySelector('#quick-assign-staff')?.value;
+ if(!staffId)return;
+ if(await manage('assignment.set',{userId:staffId,day:today,shift:quickAssignShift,enabled:true})){modal=null;render();toast(`Đã phân công ca ${quickAssignShift}.`);}
+ break;
+}
+case 'confirm-open-shift':{
+ if(!allowedShift(openingDay,openingShift)){toast('Không có quyền thao tác trên ca này.');return;}
+ const staffSelect=document.querySelector('#open-shift-staff');
+ const staffId=staffSelect?staffSelect.value:actor().id;
+ const staffMember=(access()?.members||[]).find(m=>m.user_id===staffId);
+ const timeInput=document.querySelector('#open-shift-time');
+ const openedAt=timeInput?fromLocalInput(timeInput.value):new Date().toISOString();
+ const initialCash=Number(document.querySelector('#open-initial-cash')?.value)||0;
+ const note=(document.querySelector('#open-shift-note')?.value||'').trim();
+ const existingClosing=(db.closings||[]).find(c=>c.day===openingDay&&c.shift===openingShift);
+ if(existingClosing){toast('Ca đã kết, không thể thay đổi giờ mở ca.');return;}
+
+ if(admin()&&staffId!==actor().id&&!access()?.assignments?.some(a=>a.day===openingDay&&Number(a.shift)===openingShift&&a.user_id===staffId)){
+  await manage('assignment.set',{userId:staffId,day:openingDay,shift:openingShift,enabled:true});
+ }
+
+ const op={
+  day:openingDay,
+  shift:openingShift,
+  openedAt,
+  openedBy:actor().id,
+  openedByEmail:actor().email,
+  staffId,
+  staffEmail:staffMember?.email||actor().email,
+  staffName:staffMember?.display_name||staffMember?.email||actor().email,
+  initialCash,
+  note
+ };
+ const filteredOpenings=(db.openings||[]).filter(o=>!(o.day===openingDay&&o.shift===openingShift));
+ if(persist({...db,openings:[...filteredOpenings,op]})){
+  modal=null;render();
+  toast(admin()&&op.staffEmail!==actor().email?`Đã mở ca ${openingShift} thay cho ${op.staffName}.`:`Đã mở ca ${openingShift}. Chúc bạn ca làm việc thuận lợi!`);
+ }
+ break;
+}
 case 'save-order':{if(!draft.items.length){toast('Hãy chọn ít nhất một món.');return;}if(!draft.table.trim()&&!draft.customer.trim()){toast('Nhập số order hoặc tên khách hàng.');return;}if(draft.items.some(i=>!Number.isFinite(i.price)||i.price<1000||i.price>10000000||!Number.isInteger(i.qty)||i.qty<1)){toast('Đơn giá phải từ 1.000 đến 10.000.000 ₫.');return;}
 if(!allowedShift(draft.day||today,draft.shift||shift)){toast('Bạn chưa được phân công ca này.');return;}
 if(draft.id){
@@ -164,25 +412,67 @@ if(draft.id){
  if(persist({...db,orders:updatedOrders,closings})){detailId=original.id;draft=null;modal='detail';render();toast('Đã cập nhật đơn hàng và báo cáo liên quan.');}
  return;
 }
-if(sessionState()!=='open'){toast('Ca chưa mở hoặc đã đóng.');return;}const id=crypto.randomUUID(),created=new Date().toISOString();const o={...draft,id,created,day:today,shift,code:`${today.replaceAll('-','')}-${String(db.orders.filter(x=>x.day===today).length+1).padStart(3,'0')}-${id.slice(0,6).toUpperCase()}`,label:draft.customer.trim()||`Bàn ${draft.table.trim()}`,status:'open',createdBy:actor().id,createdByEmail:actor().email};if(persist({...db,orders:[...db.orders,o]})){draft=null;modal=null;page='dashboard';render();toast('Đã lưu đơn hàng. Chạm vào đơn để thanh toán.');}break;}
+if(closed()){toast('Ca đã kết thúc.');return;}const id=crypto.randomUUID(),created=new Date().toISOString();const o={...draft,id,created,day:today,shift,code:`${today.replaceAll('-','')}-${String(db.orders.filter(x=>x.day===today).length+1).padStart(3,'0')}-${id.slice(0,6).toUpperCase()}`,label:draft.customer.trim()||`Bàn ${draft.table.trim()}`,status:'open',createdBy:actor().id,createdByEmail:actor().email};if(persist({...db,orders:[...db.orders,o]})){draft=null;modal=null;page='dashboard';render();toast('Đã lưu đơn hàng. Chạm vào đơn để thanh toán.');}break;}
 case 'go-open':shift=closingShift;sessionStorage.setItem('shift',shift);modal=null;page='dashboard';render();break;
-case 'confirm-close':{if(!canOperateShift(access(),today,closingShift)||sessionState(today,closingShift)!=='open')return;const list=orders(today,closingShift);if(list.some(o=>o.status==='open'))return;if(db.closings.some(c=>c.day===today&&c.shift===closingShift))return;const r=reportTotals(list,[]),input=document.querySelector('#close-actual-cash'),actualCash=input.value===''?NaN:Number(input.value),note=document.querySelector('#close-note').value.trim();if(!Number.isFinite(actualCash)||actualCash<0){toast('Nhập tiền mặt thực đếm hợp lệ.');return;}if(actualCash!==r.cash&&note.length<3){toast('Nhập ghi chú cho chênh lệch tiền mặt.');return;}const c={day:today,shift:closingShift,at:new Date().toISOString(),revenue:r.revenue,count:r.paid,actualCash,expectedCash:r.cash,discrepancy:actualCash-r.cash,note,closedBy:actor().id,closedByEmail:actor().email,adjustments:[]};if(persist({...db,closings:[...db.closings,c]})){modal=null;render();toast(`Đã kết ca ${closingShift}. Báo cáo đã được lưu.`);}break;}
+case 'confirm-close':{
+ if(!allowedShift(today,closingShift))return;
+ const list=orders(today,closingShift);
+ if(list.some(o=>o.status==='open'))return;
+ if(db.closings.some(c=>c.day===today&&c.shift===closingShift))return;
+ const r=reportTotals(list,[]);
+ const input=document.querySelector('#close-actual-cash');
+ const actualCash=input.value===''?NaN:Number(input.value);
+ const note=document.querySelector('#close-note').value.trim();
+ if(!Number.isFinite(actualCash)||actualCash<0){toast('Nhập tiền mặt thực đếm hợp lệ.');return;}
+ if(actualCash!==r.cash&&note.length<3){toast('Nhập ghi chú cho chênh lệch tiền mặt.');return;}
+ const timeInput=document.querySelector('#close-shift-time');
+ const at=timeInput?fromLocalInput(timeInput.value):new Date().toISOString();
+ const staffSelect=document.querySelector('#close-shift-staff');
+ const closeStaffId=staffSelect?staffSelect.value:null;
+ const closeStaff=closeStaffId?(access()?.members||[]).find(m=>m.user_id===closeStaffId):null;
+ const existingOp=(db.openings||[]).find(o=>o.day===today&&o.shift===closingShift);
+ if(closesBeforeOpen(existingOp?.openedAt,at)){toast(`Thời gian kết ca không được trước thời gian mở ca (${timeLabel(existingOp.openedAt)}).`);return;}
+ const c={
+  day:today,
+  shift:closingShift,
+  at,
+  openedAt:existingOp?.openedAt||null,
+  openedBy:existingOp?.openedBy||null,
+  openedByEmail:existingOp?.openedByEmail||null,
+  initialCash:existingOp?.initialCash||0,
+  closedForId:closeStaff?.user_id||existingOp?.staffId||null,
+  closedForEmail:closeStaff?.email||existingOp?.staffEmail||null,
+  closedForName:closeStaff?.display_name||existingOp?.staffName||null,
+  revenue:r.revenue,
+  count:r.paid,
+  actualCash,
+  expectedCash:r.cash,
+  discrepancy:actualCash-r.cash,
+  note,
+  closedBy:actor().id,
+  closedByEmail:actor().email,
+  adjustments:[]
+ };
+ if(persist({...db,closings:[...db.closings,c]})){
+  modal=null;render();
+  toast(admin()&&c.closedForEmail&&c.closedForEmail!==actor().email?`Đã kết ca ${closingShift} thay cho ${c.closedForName||c.closedForEmail}.`:`Đã kết ca ${closingShift}. Báo cáo đã được lưu.`);
+ }
+ break;
+}
 case 'reload-audit':{if(!admin())return;const result=await store.audit();if(result.ok){auditRows=result.data;render();}else toast(result.message);break;}
 case 'open-export':{if(!admin())return;exportFilters={...exportFilters,type:'orders',from:historyDate,to:historyDate,shift:historyShift};page='exports';modal=null;render();break;}
 case 'export-legacy':{if(!admin())return;download(new Blob([JSON.stringify(store.legacy(),null,2)],{type:'application/json'}),`lam-an-du-lieu-cu-${today}.json`);break;}
 case 'export-report':{if(!admin())return;const r=management(),rows=[['Từ ngày','Đến ngày','Doanh thu','Tiền mặt','Chuyển khoản','Đơn thanh toán','Đơn hủy'],[r.from,r.to,r.sums.revenue,r.sums.cash,r.sums.transfer,r.sums.paid,r.sums.cancelled]];download(new Blob(['\uFEFF'+rows.map(row=>row.join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'}),`doanh-thu-${r.from}-${r.to}.csv`);toast('Đã xuất báo cáo.');break;}
-
 case 'export':{if(!admin()){toast('Chỉ admin được xuất dữ liệu.');return;}const blob=new Blob([JSON.stringify(db,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`lam-an-${today}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);toast('Đã xuất bản sao dữ liệu');break;}
 }});
 document.addEventListener('input',e=>{if(e.target.id==='edit-reason'&&draft)draft.editReason=e.target.value;if(e.target.dataset.itemPrice&&draft?.id){const item=draft.items.find(i=>i.id===e.target.dataset.itemPrice);if(item){if(draft.status==='paid')draft.settlement={method:draft.settlement?.method||'cash',confirmed:false};item.price=e.target.value===''?NaN:Number(e.target.value);document.querySelector('#cart-total').innerHTML=cartTotal();const fields=document.querySelector('#paid-edit-fields');if(fields)fields.innerHTML=paidEditFields();}return;}if(e.target.id==='order-search'||e.target.id==='menu-search'){query=e.target.value;document.querySelector(modal==='order'?'#order-results':'#menu-results').innerHTML=menuCards(modal!=='order');}if(e.target.id==='audit-search'){const pos=e.target.selectionStart;auditQuery=e.target.value;render();const input=document.querySelector('#audit-search');input.focus();input.setSelectionRange(pos,pos);}if(e.target.id==='history-search'){const pos=e.target.selectionStart;historyQuery=e.target.value;render();const input=document.querySelector('#history-search');input.focus();input.setSelectionRange(pos,pos);}if(draft){if(e.target.id==='table-input')draft.table=e.target.value;if(e.target.id==='customer-input')draft.customer=e.target.value;if(e.target.id==='note-input')draft.note=e.target.value;}});
-document.addEventListener('change',e=>{if(e.target.id.startsWith('export-')&&admin()){const field=e.target.id.slice(7);if(Object.hasOwn(exportFilters,field)){exportFilters[field]=e.target.value;render();}}if(e.target.id==='settlement-method'&&draft){draft.settlement={...draft.settlement,method:e.target.value,confirmed:false};document.querySelector('#paid-edit-fields').innerHTML=paidEditFields();}if(e.target.id==='settlement-confirmed'&&draft)draft.settlement={...draft.settlement,method:document.querySelector('#settlement-method').value,confirmed:e.target.checked};if(e.target.id==='member-mode'){const label=document.querySelector('#member-password-label');label.hidden=e.target.value!=='new';label.querySelector('input').required=e.target.value==='new';}if(e.target.id==='report-day'){report.day=e.target.value||today;render();}if(e.target.id==='report-period'&&admin()){report.period=e.target.value;render();}if(e.target.id==='report-shift'){report.shift=e.target.value;render();}if(e.target.id==='history-date'){historyDate=e.target.value;render();}if(e.target.id==='history-shift'){historyShift=e.target.value;render();}});
+document.addEventListener('change',e=>{if(e.target.id.startsWith('export-')&&admin()){const field=e.target.id.slice(7);if(Object.hasOwn(exportFilters,field)){exportFilters[field]=e.target.value;render();}}if(e.target.id==='settlement-method'&&draft){draft.settlement={...draft.settlement,method:e.target.value,confirmed:false};document.querySelector('#paid-edit-fields').innerHTML=paidEditFields();}if(e.target.id==='settlement-confirmed'&&draft)draft.settlement={...draft.settlement,method:document.querySelector('#settlement-method').value,confirmed:e.target.checked};if(e.target.id==='member-mode'){const label=document.querySelector('#member-password-label');label.hidden=e.target.value!=='new';label.querySelector('input').required=e.target.value==='new';}if(e.target.id==='report-day'){report.day=e.target.value||today;render();}if(e.target.id==='report-period'&&admin()){report.period=e.target.value;render();}if(e.target.id==='report-shift'){report.shift=e.target.value;render();}if(e.target.id==='history-date'){historyDate=e.target.value;render();}if(e.target.id==='history-shift'){historyShift=e.target.value;render();}if(e.target.id==='shift-log-staff'&&admin()){shiftLogStaff=e.target.value;render();}if(e.target.id==='shift-log-date'){shiftLogDate=e.target.value;render();}});
 document.addEventListener('submit',async e=>{
 const form=e.target;
 if(form.id==='data-export-form'){
  e.preventDefault();if(!admin()){toast('Chỉ admin được xuất dữ liệu.');return;}
  try{const file=buildExport(db,exportFilters,{shopName:access().shopName,syncStatus:store.status().mode,day:today});download(new Blob([file.text],{type:file.mime}),file.name);toast(`Đã xuất ${file.count} ${exportFilters.type==='backup'?'đơn trong bản sao lưu':'dòng dữ liệu'}.`);}catch(error){toast(error.message);}return;
 }
-
 if(['member-form','assignment-form','cancel-form','adjust-form','password-form'].includes(form.id)){
  e.preventDefault();const f=new FormData(form),button=form.querySelector('button[type=submit]');button.disabled=true;
  try{
@@ -209,7 +499,6 @@ if(['member-form','assignment-form','cancel-form','adjust-form','password-form']
  }finally{if(button.isConnected)button.disabled=false;}
  return;
 }
-
 if(e.target.id==='cloud-login'){
  e.preventDefault();const form=e.target,button=form.querySelector('button[type=submit]'),values=new FormData(form);button.disabled=true;button.textContent='Đang đăng nhập…';
  try{const result=await store.login(values.get('email').trim(),values.get('password'));if(!result.ok){const error=document.querySelector('#cloud-login-error');if(error)error.textContent=result.message;}else toast('Đã đăng nhập. Kiểm tra trạng thái đồng bộ.');}
@@ -219,6 +508,5 @@ if(e.target.id==='cloud-login'){
 }
 if(e.target.id!=='menu-form')return;e.preventDefault();const f=new FormData(e.target),name=f.get('name').trim(),price=Number(f.get('price'));if(!name||!Number.isFinite(price)||price<1000||price>10000000){toast('Kiểm tra tên và giá món.');return;}if(db.menu.some(m=>m.id!==editingMenu?.id&&normalize(m.name)===normalize(name))){toast('Tên món này đã có trong thực đơn.');return;}const m={id:editingMenu?.id||crypto.randomUUID(),name,price,category:f.get('category')};if(!admin()){const result=await store.manage('proposal.submit',{item:m,reason:String(f.get('reason')||'').trim()});if(!result.ok){toast(result.message);return;}modal=draft?'order':null;render();toast('Đã gửi đề xuất cho admin.');return;}const menu=editingMenu?db.menu.map(x=>x.id===m.id?m:x):[...db.menu,m];if(persist({...db,menu})){query='';category='Tất cả';modal=draft?'order':null;render();toast(editingMenu?'Đã cập nhật món':'Đã thêm món vào thực đơn');}});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&modal){const close=document.querySelector('[data-action="dismiss"], [data-action="back-menu"]');close?.click();}});
-
 render();
 void store.start();

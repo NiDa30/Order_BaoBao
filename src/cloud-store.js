@@ -4,7 +4,7 @@ import {clone,same,isSnapshot,mergeSnapshots,SyncConflict} from './sync-state.js
 export const LOCAL_KEY='lam-an-pos-v1';
 const url=import.meta.env.VITE_SUPABASE_URL?.trim();
 const key=(import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY||import.meta.env.VITE_SUPABASE_ANON_KEY)?.trim();
-const empty=()=>({menu:[],orders:[],closings:[]});
+const empty=()=>({menu:[],orders:[],closings:[],openings:[]});
 function publicKey(value) {
   if(value?.startsWith('sb_publishable_'))return true;
   try{return JSON.parse(atob(value.split('.')[1])).role==='anon';}catch{return false;}
@@ -21,7 +21,7 @@ function friendly(error) {
 }
 export function createCloudStore(seed,{onData=()=>{},onStatus=()=>{}}={}) {
   let data=readJSON(LOCAL_KEY);
-  if(!isSnapshot(data))data={menu:clone(seed),orders:[],closings:[]};
+  if(!isSnapshot(data))data={menu:clone(seed),orders:[],closings:[],openings:[]};
   let configError='';
   if(url||key){try{if(!url||!key||new URL(url).protocol!=='https:'||!publicKey(key))throw new Error();}catch{configError='Cấu hình Supabase chưa hợp lệ. Chỉ dùng Project URL HTTPS và publishable/anon public key.';}}
   const client=url&&key&&!configError?createClient(url,key):null;
@@ -38,6 +38,10 @@ export function createCloudStore(seed,{onData=()=>{},onStatus=()=>{}}={}) {
       if(!same(next.menu,data.menu))return {ok:false,message:'Chỉ admin được thay đổi thực đơn. Hãy gửi đề xuất.'};
       const changed=next.orders.filter(o=>!same(o,data.orders.find(p=>p.id===o.id)));
       if(changed.some(o=>!canShift(access,o.day,o.shift)||o.status==='cancelled'&&data.orders.find(p=>p.id===o.id)?.status==='paid'))return {ok:false,message:'Không có quyền thao tác đơn này.'};
+      const changedClosings=(next.closings||[]).filter(c=>!same(c,(data.closings||[]).find(p=>p.day===c.day&&p.shift===c.shift)));
+      if(changedClosings.some(c=>!canShift(access,c.day,c.shift)))return {ok:false,message:'Không có quyền kết ca này.'};
+      const changedOpenings=(next.openings||[]).filter(o=>!same(o,(data.openings||[]).find(p=>p.day===o.day&&p.shift===o.shift)));
+      if(changedOpenings.some(o=>!canShift(access,o.day,o.shift)))return {ok:false,message:'Không có quyền mở ca này.'};
     }
     if(!session)return {ok:false,message:'Vui lòng đăng nhập trước khi sử dụng quầy bán hàng.'};
     if(status.mode==='loading')return {ok:false,message:'Đang tải dữ liệu tài khoản. Vui lòng đợi một chút.'};
@@ -98,12 +102,12 @@ export function createCloudStore(seed,{onData=()=>{},onStatus=()=>{}}={}) {
     authReady=true;generation++;session=next;
     if(!session){
       scope=null;envelope=null;access=null;
-      const legacy=readJSON(LOCAL_KEY);apply(isSnapshot(legacy)?legacy:{menu:clone(seed),orders:[],closings:[]});
+      const legacy=readJSON(LOCAL_KEY);apply(isSnapshot(legacy)?legacy:{menu:clone(seed),orders:[],closings:[],openings:[]});
       notify({mode:client?'login':'local',email:'',lastSync:null,message:client?'Đăng nhập để lưu và dùng dữ liệu trên nhiều thiết bị.':''});return;
     }
     scope=`lam-an-cloud-v2:${new URL(url).hostname}:${session.user.id}`;
     const cached=readJSON(scope);access=cached?.access||null;
-    envelope=cached&&isSnapshot(cached.local)&&isSnapshot(cached.base)?cached:{base:empty(),local:{menu:[],orders:[],closings:[]},revision:0};
+    envelope=cached&&isSnapshot(cached.local)&&isSnapshot(cached.base)?cached:{base:empty(),local:{menu:[],orders:[],closings:[],openings:[]},revision:0};
     apply(envelope.local);notify({mode:'loading',email:session.user.email||'',lastSync:null,message:'Đang tải dữ liệu tài khoản…'});
     // New accounts start with the menu only, never silently upload local sales.
     apply(envelope.local);

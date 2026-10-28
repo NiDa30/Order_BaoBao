@@ -9,7 +9,7 @@ const staff=()=>({shopId:'test-shop',shopName:'Lam An',userId:uid,email:'pos@exa
 async function open(page,id){await page.locator('[data-page=history]:visible').click();await page.locator(`[data-detail="${id}"]`).click();}
 test('staff only see assigned shifts, can edit paid orders with identity and settlement, cannot cancel paid orders',async({page,context})=>{
  const server={access:staff(),workspace:{revision:1,data:{menu:[item],orders:[paid()],closings:[]}}};await mock(context,server);await login(page);
- await expect(page.locator('[data-page=team]')).toHaveCount(0);await expect(page.locator('[data-page=audit]')).toHaveCount(0);await expect(page.locator('[data-shift="2"]')).toHaveCount(1);
+ await expect(page.locator('[data-page=team]')).toHaveCount(0);await expect(page.locator('[data-page=audit]')).toHaveCount(0);await expect(page.locator('[data-shift="2"]')).toHaveCount(0);
  await open(page,'paid-a');await expect(page.getByRole('button',{name:'Hủy đơn',exact:true})).toHaveCount(0);await page.getByRole('button',{name:'✎ Sửa đơn',exact:true}).click();await page.getByRole('button',{name:'Tăng Cà phê sữa',exact:true}).click();await page.getByRole('button',{name:'Lưu thay đổi',exact:false}).click();await expect(page.getByRole('status')).toContainText('lý do');await page.locator('#edit-reason').fill('Khách gọi thêm');await page.getByRole('button',{name:'Lưu thay đổi',exact:false}).click();await expect(page.getByRole('status')).toContainText('chênh lệch');await page.locator('#settlement-confirmed').check();await page.getByRole('button',{name:'Lưu thay đổi',exact:false}).click();await expect(page.locator('.topbar [data-cloud-label]')).toHaveText('Đã đồng bộ');expect(server.workspace.data.orders[0].updatedByEmail).toBe('pos@example.test');expect(server.workspace.data.orders[0].revisions[0].reason).toBe('Khách gọi thêm');expect(server.workspace.data.orders[0].settlement.amount).toBe(22000);
  await page.getByRole('button',{name:'Đóng',exact:true}).click();await page.locator('[data-page=revenue]:visible').click();await expect(page.locator('#report-period')).toHaveCount(0);await expect(page.locator('[data-action=export-report]')).toHaveCount(0);await expect(page.locator('#report-shift option[value="2"]')).toHaveCount(0);
 });
@@ -19,11 +19,11 @@ test('staff proposal is saved for review without changing shared menu',async({pa
 test('admin cancels paid order only after refund confirmation and revenue excludes it',async({page,context})=>{
  const server={workspace:{revision:1,data:{menu:[item],orders:[paid()],closings:[]}}};await mock(context,server);await login(page);await open(page,'paid-a');await page.getByRole('button',{name:'Hủy đơn',exact:true}).click();await page.locator('[name=reason]').fill('Khách hủy sau thu');await page.getByRole('button',{name:'Xác nhận hủy đơn',exact:true}).click();expect(server.workspace.data.orders[0].status).toBe('paid');await page.locator('[name=refund]').check();await page.getByRole('button',{name:'Xác nhận hủy đơn',exact:true}).click();await expect(page.locator('.topbar [data-cloud-label]')).toHaveText('Đã đồng bộ');expect(server.workspace.data.orders[0].status).toBe('cancelled');expect(server.workspace.data.orders[0].refundAmount).toBe(22000);await page.getByRole('button',{name:'Đóng',exact:true}).click();await page.locator('[data-page=revenue]:visible').click();await expect(page.locator('.stat').first()).toContainText('0 ₫');
 });
-test('admin manages accounts with manual assignment disabled and views day week month revenue',async({page,context})=>{
- const server={workspace:{revision:1,data:{menu:[item],orders:[paid()],closings:[]}}};await mock(context,server);await login(page);await page.locator('[data-page=team]:visible').click();await page.locator('#member-form [name=name]').fill('Nhân viên mới');await page.locator('#member-form [name=email]').fill('staff@example.test');await page.getByRole('button',{name:'Thêm tài khoản',exact:true}).click();await expect(page.locator('.member-list')).toContainText('Nhân viên mới');await expect(page.locator('#assignment-form,[data-unassign]')).toHaveCount(0);expect(server.calls.map(c=>c.action)).toEqual(['member.add']);await page.locator('[data-page=revenue]:visible').click();await page.locator('#report-period').selectOption('week');await expect(page.locator('.stat').first()).toContainText('22.000');await page.locator('#report-period').selectOption('month');await expect(page.locator('.stat').first()).toContainText('22.000');expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await page.screenshot({path:`test-results/revenue-${test.info().project.name}.png`,fullPage:true});
+test('admin manages accounts, assigns shifts and views day week month revenue',async({page,context})=>{
+ const server={workspace:{revision:1,data:{menu:[item],orders:[paid()],closings:[]}}};await mock(context,server);await login(page);await page.locator('[data-page=team]:visible').click();await page.locator('#member-form [name=name]').fill('Nhân viên mới');await page.locator('#member-form [name=email]').fill('staff@example.test');await page.getByRole('button',{name:'Thêm tài khoản',exact:true}).click();await expect(page.locator('.member-list')).toContainText('Nhân viên mới');await page.locator('#assignment-form [name=userId]').selectOption('staff-new');await page.getByRole('button',{name:'Phân ca',exact:true}).click();await expect(page.locator('.history-list')).toContainText('Nhân viên mới');expect(server.calls.map(c=>c.action)).toEqual(['member.add','assignment.set']);await page.locator('[data-page=revenue]:visible').click();await page.locator('#report-period').selectOption('week');await expect(page.locator('.stat').first()).toContainText('22.000');await page.locator('#report-period').selectOption('month');await expect(page.locator('.stat').first()).toContainText('22.000');expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await page.screenshot({path:`test-results/revenue-${test.info().project.name}.png`,fullPage:true});
 });
 test('closing cash discrepancy requires a note; admin adjustment is audited via RPC',async({page,context})=>{
- const server={workspace:{revision:1,data:{menu:[item],orders:[paid()],closings:[]}}};await mock(context,server);server.access.role='staff';server.access.assignments=[{day,shift:1,user_id:server.access.userId}];await login(page);await page.getByRole('button',{name:'◴ Mở / đóng ca',exact:true}).click();await page.getByRole('button',{name:'Kết ca 1 ↗'}).click();await page.locator('#close-actual-cash').fill('21000');await page.getByRole('button',{name:'Xác nhận kết ca',exact:true}).click();await expect(page.getByRole('status')).toContainText('ghi chú');await page.locator('#close-note').fill('Thiếu tiền lẻ');await page.getByRole('button',{name:'Xác nhận kết ca',exact:true}).click();await expect(page.locator('.topbar [data-cloud-label]')).toHaveText('Đã đồng bộ');expect(server.workspace.data.closings[0].discrepancy).toBe(-1000);server.access.role='admin';await page.locator('.topbar [data-action=cloud]').click();await page.getByRole('button',{name:'↻ Đồng bộ ngay',exact:true}).click();await expect(page.locator('.cloud-summary')).toContainText('Đã đồng bộ');await page.getByRole('button',{name:'Đóng',exact:true}).click();await page.getByRole('button',{name:'Điều chỉnh ca',exact:true}).click();await page.locator('#adjust-form [name=amount]').fill('-1000');await page.locator('#adjust-form [name=reason]').fill('Đối chiếu tiền lẻ');await page.getByRole('button',{name:'Lưu điều chỉnh',exact:true}).click();expect(server.calls[0].action).toBe('shift.adjust');await expect(page.locator('.shift-card').first()).toContainText('21.000');
+ const server={workspace:{revision:1,data:{menu:[item],orders:[paid()],closings:[]}}};await mock(context,server);await login(page);await page.getByRole('button',{name:'◴ Kết ca',exact:true}).click();await page.getByRole('button',{name:'Kết ca 1 ↗'}).click();await page.locator('#close-actual-cash').fill('21000');await page.getByRole('button',{name:'Xác nhận kết ca',exact:true}).click();await expect(page.getByRole('status')).toContainText('ghi chú');await page.locator('#close-note').fill('Thiếu tiền lẻ');await page.getByRole('button',{name:'Xác nhận kết ca',exact:true}).click();await expect(page.locator('.topbar [data-cloud-label]')).toHaveText('Đã đồng bộ');expect(server.workspace.data.closings[0].discrepancy).toBe(-1000);await page.getByRole('button',{name:'Điều chỉnh ca',exact:true}).click();await page.locator('#adjust-form [name=amount]').fill('-1000');await page.locator('#adjust-form [name=reason]').fill('Đối chiếu tiền lẻ');await page.getByRole('button',{name:'Lưu điều chỉnh',exact:true}).click();expect(server.calls[0].action).toBe('shift.adjust');await expect(page.locator('.shift-card').first()).toContainText('21.000');
 });
 test('calendar periods and settlement breakdown include refunds and manual corrections',()=>{
  expect(periodRange('2026-11-01','week')).toEqual(['2026-10-26','2026-11-01']);expect(periodRange('2028-02-15','month')).toEqual(['2028-02-01','2028-02-29']);const order={...paid(),items:[{...item,qty:2}],paymentTotals:{cash:22000,transfer:22000,unknown:0}};const r=reportTotals([order,{...paid('cancel'),status:'cancelled'}],[{adjustments:[{amount:-1000,method:'cash'}]}]);expect(r.revenue).toBe(43000);expect(r.cash).toBe(21000);expect(r.transfer).toBe(22000);expect(r.cancelled).toBe(1);
@@ -33,4 +33,114 @@ test('blocked membership cannot see cached data or enter dashboard and can sign 
 });
 test('admin audit shows account, reason and before-after snapshots',async({page,context})=>{
  const server={workspace:null,audit:[{id:'audit-test',action:'order.edit',actor_email:'staff@example.test',created_at:new Date().toISOString(),target_id:'order-1',reason:'Khách gọi thêm',before_data:{amount:22000},after_data:{amount:44000}}]};await mock(context,server);await login(page);await page.locator('[data-page=audit]:visible').click();await expect(page.locator('.audit-entry')).toContainText('staff@example.test');await page.locator('.audit-entry summary').click();await expect(page.locator('.audit-snapshots')).toContainText('22000');await expect(page.locator('.audit-snapshots')).toContainText('44000');await page.getByLabel('Tìm nhật ký',{exact:true}).fill('không tồn tại');await expect(page.locator('.audit-entry')).toHaveCount(0);
+});
+
+test('staff can open and close shift with real-time defaults and adjusted time',async({page,context})=>{
+ const server={access:staff(),workspace:{revision:1,data:{menu:[item],orders:[],closings:[],openings:[]}}};
+ await mock(context,server);await login(page);
+ await page.locator('nav [data-page=shifts]:visible').click();
+ await expect(page.locator('.shift-card').first()).toContainText('Chưa mở');
+ await page.getByRole('button',{name:'Mở ca 1 ↗'}).click();
+ await expect(page.locator('#open-shift-time')).toBeVisible();
+ await page.getByRole('button',{name:'Hiện tại'}).click();
+ await page.locator('#open-shift-time').fill(`${day}T07:30`);
+ await page.locator('#open-initial-cash').fill('50000');
+ await page.locator('#open-shift-note').fill('Tiền lẻ đầu ca');
+ await page.getByRole('button',{name:'Bắt đầu mở ca ↗'}).click();
+ await expect(page.locator('.topbar [data-cloud-label]')).toHaveText('Đã đồng bộ');
+ await expect(page.locator('.shift-card').first()).toContainText('Đang mở');
+ await expect(page.locator('.shift-card').first()).toContainText('50.000 ₫');
+ await expect(page.locator('.shift-card').first()).toContainText('07:30');
+ expect(server.workspace.data.openings[0].initialCash).toBe(50000);
+
+ await page.getByRole('button',{name:'Điều chỉnh giờ mở ca'}).click();
+ await page.locator('#open-shift-time').fill(`${day}T07:45`);
+ await page.getByRole('button',{name:'Lưu thay đổi thời gian ↗'}).click();
+ await expect(page.locator('.topbar [data-cloud-label]')).toHaveText('Đã đồng bộ');
+ await expect(page.locator('.shift-card').first()).toContainText('07:45');
+
+ await page.getByRole('button',{name:'Kết ca 1 ↗'}).click();
+ await expect(page.locator('#close-shift-time')).toBeVisible();
+ await page.locator('#close-shift-time').fill(`${day}T12:00`);
+ await page.locator('#close-actual-cash').fill('0');
+ await page.getByRole('button',{name:'Xác nhận kết ca',exact:true}).click();
+ await expect(page.locator('.topbar [data-cloud-label]')).toHaveText('Đã đồng bộ');
+ await expect(page.locator('.shift-card').first()).toContainText('Đã kết ca');
+ await expect(page.locator('.shift-card').first()).toContainText('12:00');
+ expect(new Date(server.workspace.data.closings[0].at).getHours()).toBe(12);
+ expect(new Date(server.workspace.data.closings[0].openedAt).getHours()).toBe(7);
+ expect(new Date(server.workspace.data.closings[0].openedAt).getMinutes()).toBe(45);
+});
+
+test('admin can assign shift from shift management and open/close shift on behalf of staff',async({page,context})=>{
+ const staffUser={user_id:'staff-1',email:'nhanvien@example.test',display_name:'Điền Thạch',role:'staff',active:true};
+ const adminAccess={shopId:'test-shop',shopName:'Lam An',userId:uid,email:'admin@example.test',role:'admin',assignments:[],members:[{user_id:uid,email:'admin@example.test',role:'admin',active:true,display_name:'Admin'},staffUser],proposals:[]};
+ const server={access:adminAccess,workspace:{revision:1,data:{menu:[item],orders:[],closings:[],openings:[]}}};
+ await mock(context,server);await login(page);
+ await page.locator('nav [data-page=shifts]:visible').click();
+
+ await page.getByRole('button',{name:'Phân công ca 2'}).click();
+ await page.locator('#quick-assign-staff').selectOption('staff-1');
+ await page.getByRole('button',{name:'Xác nhận phân ca'}).click();
+ expect(server.calls[0].action).toBe('assignment.set');
+
+ await page.getByRole('button',{name:'Mở ca 3 (hoặc thay NV) ↗'}).click();
+ await page.locator('#open-shift-staff').selectOption('staff-1');
+ await page.locator('#open-shift-time').fill(`${day}T14:00`);
+ await page.getByRole('button',{name:'Xác nhận mở ca ↗'}).click();
+ await expect(page.locator('.topbar [data-cloud-label]')).toHaveText('Đã đồng bộ');
+ await expect(page.locator('.shift-card').nth(2)).toContainText('Đang mở');
+ await expect(page.locator('.shift-card').nth(2)).toContainText('nhanvien@example.test');
+ await expect.poll(()=>server.workspace.data.openings.some(o=>o.shift===3&&o.staffId==='staff-1')).toBe(true);
+
+ await page.getByRole('button',{name:'Kết ca 3 thay nhân viên ↗'}).click();
+ await page.locator('#close-shift-time').fill(`${day}T18:00`);
+ await page.locator('#close-actual-cash').fill('0');
+ await page.getByRole('button',{name:'Xác nhận kết ca',exact:true}).click();
+ await expect(page.locator('.topbar [data-cloud-label]')).toHaveText('Đã đồng bộ');
+ await expect(page.locator('.shift-card').nth(2)).toContainText('Đã kết ca');
+ await expect(page.locator('.shift-card').nth(2)).toContainText('nhanvien@example.test');
+ await expect.poll(()=>server.workspace.data.closings.some(c=>c.shift===3&&c.closedForEmail==='nhanvien@example.test')).toBe(true);
+});
+
+test('closing time cannot be earlier than opening time and history lists open and close',async({page,context})=>{
+ const server={access:staff(),workspace:{revision:1,data:{menu:[item],orders:[],closings:[],openings:[]}}};
+ await mock(context,server);await login(page);
+ await page.locator('nav [data-page=shifts]:visible').click();
+ await page.getByRole('button',{name:'Mở ca 1 ↗'}).click();
+ await page.locator('#open-shift-time').fill(`${day}T08:00`);
+ await page.getByRole('button',{name:'Bắt đầu mở ca ↗'}).click();
+ await expect(page.locator('.topbar [data-cloud-label]')).toHaveText('Đã đồng bộ');
+ await expect(page.locator('.shift-log-row')).toContainText('Chưa kết ca');
+
+ await page.getByRole('button',{name:'Kết ca 1 ↗'}).click();
+ await page.locator('#close-shift-time').fill(`${day}T07:00`);
+ await page.locator('#close-actual-cash').fill('0');
+ await page.getByRole('button',{name:'Xác nhận kết ca',exact:true}).click();
+ await expect(page.getByRole('status')).toContainText('không được trước thời gian mở ca');
+ expect(server.workspace.data.closings).toHaveLength(0);
+
+ await page.locator('#close-shift-time').fill(`${day}T11:30`);
+ await page.getByRole('button',{name:'Xác nhận kết ca',exact:true}).click();
+ await expect(page.locator('.topbar [data-cloud-label]')).toHaveText('Đã đồng bộ');
+ const row=page.locator('.shift-log-row');
+ await expect(row).toHaveCount(1);
+ await expect(row).toContainText('08:00');
+ await expect(row).toContainText('11:30');
+ await expect(row).toContainText('3 giờ 30 phút');
+ await expect(row).toContainText('Đã kết ca');
+});
+
+test('admin filters shift open and close history by staff',async({page,context})=>{
+ const a={user_id:'staff-a',email:'a@example.test',display_name:'Nhân viên A',role:'staff',active:true},b={user_id:'staff-b',email:'b@example.test',display_name:'Nhân viên B',role:'staff',active:true};
+ const adminAccess={shopId:'test-shop',shopName:'Lam An',userId:uid,email:'admin@example.test',role:'admin',assignments:[],members:[{user_id:uid,email:'admin@example.test',role:'admin',active:true,display_name:'Admin'},a,b],proposals:[]};
+ const openings=[{day,shift:1,openedAt:`${day}T00:00:00.000Z`,openedByEmail:'a@example.test',staffId:'staff-a',staffName:'Nhân viên A'},{day,shift:2,openedAt:`${day}T05:00:00.000Z`,openedByEmail:'admin@example.test',staffId:'staff-b',staffName:'Nhân viên B'}];
+ const server={access:adminAccess,workspace:{revision:1,data:{menu:[item],orders:[],closings:[],openings}}};
+ await mock(context,server);await login(page);
+ await page.locator('nav [data-page=shifts]:visible').click();
+ await expect(page.locator('.shift-log-row')).toHaveCount(2);
+ await page.locator('#shift-log-staff').selectOption('staff-b');
+ await expect(page.locator('.shift-log-row')).toHaveCount(1);
+ await expect(page.locator('.shift-log-row')).toContainText('Nhân viên B');
+ await expect(page.locator('.shift-log-row')).toContainText('admin@example.test');
 });

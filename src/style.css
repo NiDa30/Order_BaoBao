@@ -51,3 +51,11 @@ button.sidebar-bottom{background:#fffefa;text-align:left;width:100%;color:inheri
 .management-panel [hidden]{display:none!important}
 .export-layout{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:24px;align-items:start}.export-dates{display:grid;grid-template-columns:1fr 1fr;gap:14px}.export-count{font-size:36px;font-weight:600;color:var(--green);margin:25px 0 15px}.export-count small{display:block;font-size:11px;color:#91a17d;font-weight:400;margin-top:9px}.export-info>.muted{margin-top:18px;font-size:10px}.export-info>.secondary{justify-content:center}.export-layout input:disabled,.export-layout select:disabled{background:#f1f3ec;color:#a4ac99;cursor:not-allowed}.export-layout .primary{margin-top:20px}
 @media(max-width:700px){.export-layout{grid-template-columns:1fr;gap:18px}.export-layout .management-panel{padding:20px}.export-dates{gap:10px}.export-dates input{min-width:0;padding:10px 7px}.export-count{font-size:30px}}
+
+.time-input-group{display:flex;gap:8px;align-items:center}
+.time-input-group input{flex:1}
+.time-input-group button{padding:10px 14px;min-height:42px;font-size:11px}
+.mt-1{margin-top:8px}
+.badge.muted-badge{background:#e8ece3;color:#78867a}
+.badge.active-shift{background:#def0e3;color:#2c7446}
+.shift-card .shift-assigned{font-size:10px;color:#748471;margin-top:4px;display:flex;align-items:center;gap:6px}
