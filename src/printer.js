@@ -18,11 +18,14 @@ export const DRIVERS = {
 export const RAWBT_PLAY = 'https://play.google.com/store/apps/details?id=ru.a402d.rawbtprinter';
 // Android app for POS terminals (built by .github/workflows/android.yml).
 export const APP_APK = 'https://github.com/NiDa30/Order_BaoBao/releases/latest/download/LamAnPOS.apk';
-/** window.LamAnAndroid is injected by the Lam An POS Android app (android/). */
-export function appBridge(win = globalThis) {
+/**
+ * window.LamAnAndroid is injected by the Lam An POS Android app (android/). Its methods return a string
+ * (older WebView build) or a Promise of a string (GeckoView build): always await them.
+ */
+export async function appBridge(win = globalThis) {
   const b = win.LamAnAndroid;
   if (!b || typeof b.info !== 'function') return null;
-  try { return { bridge: b, info: JSON.parse(b.info()) }; } catch { return null; }
+  try { return { bridge: b, info: JSON.parse(await b.info()) }; } catch { return null; }
 }
 const SPP = '00001101-0000-1000-8000-00805f9b34fb';
 export const defaultSettings = () => ({ driver: 'auto', paper: null, mode: 'image', copies: 1, autoPrint: false, baudRate: 9600, shop: { ...DEFAULT_SHOP }, lastTest: null });
@@ -92,7 +95,7 @@ const serialName = p => {
 export async function detect(nav = globalThis.navigator) {
   let model = '';
   try { model = (await nav.userAgentData?.getHighEntropyValues?.(['model']))?.model || ''; } catch { /* hints are optional */ }
-  const app = appBridge();
+  const app = await appBridge();
   const device = classifyDevice({ ua: nav.userAgent || '', model: app?.info.model || model });
   if (app?.info.paper === 58 || app?.info.paper === 80) device.suggestedPaper = app.info.paper;
   const caps = { usb: !!nav.usb, serial: !!nav.serial, print: typeof globalThis.print === 'function', app: !!app, appPrinter: app?.info.printer === 'sunmi' };
@@ -263,9 +266,9 @@ export async function send(jobs, settings, detection, { win = globalThis, fallba
     }
     const bytes = concat(list.map(b => buildJob(b, { paper, mode, doc: win.document }).bytes));
     if (driver === 'android') {
-      const app = appBridge(win);
+      const app = await appBridge(win);
       if (!app) return { ok: false, driver, message: 'Chỉ dùng được trong ứng dụng Lam An POS trên máy POS.' };
-      const r = JSON.parse(app.bridge.printBase64(toBase64(bytes)));
+      const r = JSON.parse(await app.bridge.printBase64(toBase64(bytes)));
       return { ok: !!r.ok, driver, confirmed: !!r.ok, message: r.message || (r.ok ? 'Đã in.' : 'In không thành công.') };
     }
     if (driver === 'rawbt') {

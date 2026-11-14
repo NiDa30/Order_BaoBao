@@ -7,16 +7,18 @@ def keystoreFile = System.getenv('KEYSTORE_FILE')
 
 android {
     namespace 'vn.laman.pos'
-    compileSdk 34
+    compileSdk 35
 
     defaultConfig {
         applicationId 'vn.laman.pos'
         minSdk 21
-        targetSdk 34
+        targetSdk 35
         versionCode buildNumber
         versionName "1.0.${buildNumber}"
         buildConfigField 'String', 'DEFAULT_URL', '"https://orderbaobao.vercel.app"'
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+        // POS terminals are ARM; armeabi-v7a also runs on 64-bit ARM and keeps the APK small.
+        ndk { abiFilters 'armeabi-v7a' }
     }
 
     buildFeatures { buildConfig true }
@@ -35,6 +37,10 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Device tests run on an x86_64 Android 6 emulator in CI.
+            ndk { abiFilters 'armeabi-v7a', 'x86_64' }
+        }
         release {
             minifyEnabled false
             // Without a release keystore (GitHub secrets) the APK is signed with the debug key.
@@ -51,6 +57,9 @@ android {
 dependencies {
     // Official SUNMI built-in printer SDK (binds woyou.aidlservice.jiuiv5).
     implementation 'com.sunmi:printerlibrary:1.0.15'
+    // Firefox engine bundled with the app: modern JavaScript and its own CA store on old Android.
+    // 144 is the last GeckoView line that supports Android 5–7 (145+ requires Android 8).
+    implementation 'org.mozilla.geckoview:geckoview:144.+'
 
     // Device tests (run on an Android 6 emulator in CI, see .github/workflows/android.yml)
     androidTestImplementation 'androidx.test:runner:1.5.2'

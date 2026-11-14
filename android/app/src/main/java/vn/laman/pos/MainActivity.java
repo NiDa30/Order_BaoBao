@@ -1,51 +1,54 @@
 package vn.laman.pos;
 
-import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.app.DownloadManager;
 import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.content.pm.PackageManager;
 import android.net.Uri;
-import android.net.http.SslError;
 import android.os.Build;
 import android.os.Bundle;
-import android.os.Environment;
 import android.util.Base64;
+import android.util.Log;
 import android.view.KeyEvent;
-import android.webkit.CookieManager;
-import android.webkit.SslErrorHandler;
-import android.webkit.URLUtil;
-import android.webkit.WebChromeClient;
-import android.webkit.WebSettings;
-import android.webkit.WebView;
-import android.webkit.WebViewClient;
 import android.widget.EditText;
 import android.widget.Toast;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.mozilla.geckoview.AllowOrDeny;
+import org.mozilla.geckoview.GeckoResult;
+import org.mozilla.geckoview.GeckoRuntime;
+import org.mozilla.geckoview.GeckoRuntimeSettings;
+import org.mozilla.geckoview.GeckoSession;
+import org.mozilla.geckoview.GeckoView;
+import org.mozilla.geckoview.WebExtension;
+import org.mozilla.geckoview.WebRequestError;
 
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
- * Lam An POS for Android POS terminals: opens the shop's web app and prints bills on the built-in
- * SUNMI printer. Handles RawBT print links itself, so neither the full nor the Lite web version needs RawBT.
- * Always opens the full version. On Android older than 7.1.1 the Let's Encrypt chain used by Vercel is
- * validated with bundled ISRG roots (see TlsCompat).
+ * Lam An POS for Android POS terminals. Shows the shop's full web app in GeckoView (Firefox engine, bundled
+ * with the app) so it also runs on old devices such as the SUNMI T1 (Android 6): the system WebView there
+ * is too old for the app and does not trust the Let's Encrypt certificates used by Vercel.
+ * Bills print on the built-in SUNMI printer through window.LamAnAndroid (built-in WebExtension,
+ * assets/lamanpos) or the RawBT / lamanpos:// links, so RawBT is not needed.
  */
 public class MainActivity extends Activity {
+    private static final String TAG = "LamAnPOS";
     private static final String PREFS = "lam-an-pos";
-    /** The full web app is built for Chrome 64+ (vite.config.js); older WebViews cannot run it. */
-    static final int MIN_WEBVIEW = 64;
-    private int webViewMajor = 0;
-    private WebView web;
+    private static GeckoRuntime runtime;
+    /** Last page state reported by the content script (device tests and diagnostics). */
+    static volatile String lastPageState = null;
+
+    private GeckoView view;
+    private GeckoSession session;
     private SharedPreferences prefs;
     private PrinterBridge printer;
+    private boolean canGoBack;
+    private final ExecutorService worker = Executors.newSingleThreadExecutor();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -54,95 +57,113 @@ public class MainActivity extends Activity {
         printer = new PrinterBridge(this);
         printer.connect();
 
-        web = new WebView(this);
-        setContentView(web);
-        WebSettings s = web.getSettings();
-        s.setJavaScriptEnabled(true);
-        s.setDomStorageEnabled(true);
-        s.setDatabaseEnabled(true);
-        s.setLoadWithOverviewMode(true);
-        s.setUseWideViewPort(true);
-        Matcher chrome = Pattern.compile("Chrome/(\\d+)").matcher(s.getUserAgentString());
-        webViewMajor = chrome.find() ? Integer.parseInt(chrome.group(1)) : 0;
-        printer.setWebViewVersion(webViewMajor);
-        s.setUserAgentString(s.getUserAgentString() + " LamAnPOS/" + BuildConfig.VERSION_NAME);
-        CookieManager.getInstance().setAcceptCookie(true);
-        if (Build.VERSION.SDK_INT >= 21) CookieManager.getInstance().setAcceptThirdPartyCookies(web, false);
-        web.addJavascriptInterface(printer, "LamAnAndroid");
-        web.setWebChromeClient(new WebChromeClient()); // alert()/confirm() dialogs used by the web app
-        web.setWebViewClient(new WebViewClient() {
+        view = new GeckoView(this);
+        setContentView(view);
+        if (runtime == null) {
+            runtime = GeckoRuntime.create(getApplicationContext(), new GeckoRuntimeSettings.Builder()
+                    .javaScriptEnabled(true)
+                    .remoteDebuggingEnabled(false)
+                    .build());
+        }
+        session = new GeckoSession();
+        session.setPromptDelegate(new GeckoPrompts(this));
+        session.setNavigationDelegate(new GeckoSession.NavigationDelegate() {
             @Override
-            @SuppressWarnings("deprecation")
-            public boolean shouldOverrideUrlLoading(WebView view, String url) {
-                return handleUrl(url);
+            public GeckoResult<AllowOrDeny> onLoadRequest(GeckoSession s, LoadRequest request) {
+                return GeckoResult.fromValue(handleUrl(request.uri) ? AllowOrDeny.DENY : AllowOrDeny.ALLOW);
             }
 
             @Override
-            @SuppressWarnings("deprecation")
-            public void onReceivedError(WebView view, int errorCode, String description, String failingUrl) {
-                showProblem(view, "Không kết nối được", "Kiểm tra Wi-Fi hoặc mạng rồi thử lại.", description + " (" + errorCode + ")",
-                        failingUrl != null && failingUrl.startsWith("http") ? failingUrl : startUrl());
+            public void onCanGoBack(GeckoSession s, boolean value) {
+                canGoBack = value;
             }
 
             @Override
-            public void onReceivedSslError(final WebView view, final SslErrorHandler handler, final SslError error) {
-                // Old Android does not trust Let's Encrypt roots: validate the chain ourselves (TlsCompat).
-                new Thread(() -> {
-                    final boolean ok = TlsCompat.accept(MainActivity.this, error);
-                    runOnUiThread(() -> {
-                        if (ok) {
-                            handler.proceed();
-                            return;
-                        }
-                        handler.cancel();
-                        if (sameSite(Uri.parse(error.getUrl())))
-                            showProblem(view, "Chứng chỉ bảo mật không hợp lệ", "Không thể xác minh kết nối an toàn tới trang của quán. Kiểm tra ngày giờ của máy rồi thử lại.",
-                                    "SSL error " + error.getPrimaryError(), startUrl());
-                    });
-                }).start();
+            public GeckoResult<String> onLoadError(GeckoSession s, String uri, WebRequestError error) {
+                return GeckoResult.fromValue(problemPage("Không kết nối được",
+                        "Kiểm tra Wi-Fi hoặc mạng rồi bấm Thử lại.", "Mã lỗi " + error.code + " / " + error.category, startUrl()));
             }
         });
-        web.setDownloadListener((url, userAgent, contentDisposition, mimeType, contentLength) -> download(url, userAgent, contentDisposition, mimeType));
+        session.open(runtime);
+        view.setSession(session);
 
-        if (webViewMajor > 0 && webViewMajor < MIN_WEBVIEW) showOldWebView();
-        else if (savedInstanceState != null) web.restoreState(savedInstanceState);
-        else web.loadUrl(startUrl());
+        // Load the page only once the bridge extension is ready, so window.LamAnAndroid exists from the start.
+        runtime.getWebExtensionController()
+                .ensureBuiltIn("resource://android/assets/lamanpos/", "lamanpos@laman.vn")
+                .accept(ext -> {
+                    session.getWebExtensionController().setMessageDelegate(ext, messageDelegate, "lamanpos");
+                    session.loadUri(startUrl());
+                }, e -> {
+                    Log.e(TAG, "bridge extension failed", e);
+                    session.loadUri(startUrl());
+                });
     }
 
-    WebView getWebView() {
-        return web;
-    }
+    private final WebExtension.MessageDelegate messageDelegate = new WebExtension.MessageDelegate() {
+        @Override
+        public void onConnect(WebExtension.Port port) {
+            port.setDelegate(new WebExtension.PortDelegate() {
+                @Override
+                public void onPortMessage(Object message, WebExtension.Port p) {
+                    if (!(message instanceof JSONObject)) return;
+                    final JSONObject m = (JSONObject) message;
+                    final String sender = p.sender == null ? null : p.sender.url;
+                    worker.execute(() -> {
+                        String result = answer(m.optString("method"), m.optString("arg"), sender);
+                        JSONObject reply = new JSONObject();
+                        try {
+                            reply.put("id", m.optInt("id"));
+                            reply.put("result", result);
+                        } catch (Exception ignored) {
+                        }
+                        runOnUiThread(() -> p.postMessage(reply));
+                    });
+                }
 
-    private String deviceLine() {
-        return Build.MANUFACTURER + " " + Build.MODEL + " · Android " + Build.VERSION.RELEASE + " · WebView " + (webViewMajor > 0 ? webViewMajor : "?") + " · App " + BuildConfig.VERSION_NAME;
-    }
+                @Override
+                public void onDisconnect(WebExtension.Port p) {
+                }
+            });
+        }
+    };
 
-    private void showProblem(WebView view, String title, String text, String detail, String retry) {
-        view.loadDataWithBaseURL(null, "<html><head><meta name='viewport' content='width=device-width'></head><body style='font-family:sans-serif;padding:24px;color:#21362c'>"
-                + "<h2>" + escape(title) + "</h2><p>" + escape(text) + "</p><p style='color:#777;font-size:13px'>" + escape(detail) + "<br>" + escape(deviceLine()) + "</p>"
-                + "<p><a href='" + escape(retry) + "' style='font-size:20px;display:inline-block;background:#245344;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none'>Thử lại</a></p>"
-                + "<p><a href='lamanpos://settings'>Cài đặt ứng dụng</a></p></body></html>", "text/html", "utf-8", null);
-    }
-
-    private void showOldWebView() {
-        showProblem(web, "Trình duyệt hệ thống quá cũ",
-                "Bản đầy đủ cần Android System WebView (Chrome) bản " + MIN_WEBVIEW + " trở lên. Hãy cập nhật \"Android System WebView\" hoặc \"Google Chrome\" trong kho ứng dụng của máy rồi mở lại.",
-                "WebView hiện tại: " + webViewMajor, startUrl());
+    /** Bridge calls from the page. Only the configured shop site may use the printer. */
+    String answer(String method, String arg, String senderUrl) {
+        if (senderUrl == null || !sameSite(Uri.parse(senderUrl))) return "{\"ok\":false,\"message\":\"Trang này không được phép dùng máy in.\"}";
+        switch (method) {
+            case "info":
+                try {
+                    JSONObject o = new JSONObject(printer.info());
+                    o.put("engine", "gecko");
+                    return o.toString();
+                } catch (Exception e) {
+                    return printer.info();
+                }
+            case "printBase64":
+                return printer.printBase64(arg);
+            case "pageState":
+                lastPageState = arg;
+                Log.i(TAG, "page state: " + arg);
+                return "ok";
+            default:
+                return "{\"ok\":false,\"message\":\"Không hỗ trợ\"}";
+        }
     }
 
     private String baseUrl() {
         return prefs.getString("base", BuildConfig.DEFAULT_URL);
     }
 
-    private String startUrl() {
+    String startUrl() {
         return baseUrl() + "/";
     }
 
     private boolean sameSite(Uri uri) {
         Uri base = Uri.parse(baseUrl());
-        return uri.getHost() != null && uri.getHost().equalsIgnoreCase(base.getHost());
+        return "https".equals(uri.getScheme()) && uri.getHost() != null && uri.getHost().equalsIgnoreCase(base.getHost());
     }
 
+    /** Returns true when the app handled the URL itself (the page must not navigate). */
     boolean handleUrl(String url) {
         if (url == null) return true;
         // RawBT links produced by the web app ("intent:base64,...#Intent;scheme=rawbt;...") or "rawbt:base64,..."
@@ -165,9 +186,12 @@ public class MainActivity extends Activity {
             else if (host.equals("test-print")) testPrint();
             return true;
         }
+        if (url.startsWith("about:") || url.startsWith("data:") || url.startsWith("blob:") || url.startsWith("resource:") || url.startsWith("moz-extension:")) return false;
         if (url.startsWith("http://") || url.startsWith("https://")) {
-            if (sameSite(Uri.parse(url))) return false;
-            openExternal(Uri.parse(url));
+            Uri u = Uri.parse(url);
+            if (sameSite(u)) return false;
+            if (u.getHost() != null && u.getHost().endsWith(".supabase.co")) return false;
+            openExternal(u);
             return true;
         }
         if (url.startsWith("intent:")) {
@@ -192,11 +216,10 @@ public class MainActivity extends Activity {
 
     private void printAsync(final byte[] data) {
         toast("Đang in…");
-        new Thread(() -> {
-            JSONObject r = printer.printRaw(data);
-            final String msg = r.optString("message");
+        worker.execute(() -> {
+            final String msg = printer.printRaw(data).optString("message");
             runOnUiThread(() -> toast(msg));
-        }).start();
+        });
     }
 
     /** Lite version: lines are laid out by the server; rendered here with the Vietnamese system font. */
@@ -211,7 +234,7 @@ public class MainActivity extends Activity {
             return;
         }
         toast("Đang in…");
-        new Thread(() -> {
+        worker.execute(() -> {
             String msg;
             try {
                 msg = printer.printRaw(ReceiptRenderer.render(json, paper)).optString("message");
@@ -220,11 +243,11 @@ public class MainActivity extends Activity {
             }
             final String m = msg;
             runOnUiThread(() -> toast(m));
-        }).start();
+        });
     }
 
     private void testPrint() {
-        new Thread(() -> {
+        worker.execute(() -> {
             String msg;
             try {
                 JSONObject info = new JSONObject(printer.info());
@@ -249,7 +272,7 @@ public class MainActivity extends Activity {
             }
             final String m = msg;
             runOnUiThread(() -> toast(m));
-        }).start();
+        });
     }
 
     private static JSONArray line(String text, int bold, int size) {
@@ -260,13 +283,29 @@ public class MainActivity extends Activity {
         return a;
     }
 
+    private String deviceLine() {
+        return Build.MANUFACTURER + " " + Build.MODEL + " · Android " + Build.VERSION.RELEASE + " · App " + BuildConfig.VERSION_NAME;
+    }
+
+    private String problemPage(String title, String text, String detail, String retry) {
+        String html = "<html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width'></head><body style='font-family:sans-serif;padding:24px;color:#21362c'>"
+                + "<h2>" + escape(title) + "</h2><p>" + escape(text) + "</p><p style='color:#777;font-size:13px'>" + escape(detail) + "<br>" + escape(deviceLine()) + "</p>"
+                + "<p><a href='" + escape(retry) + "' style='font-size:20px;display:inline-block;background:#245344;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none'>Thử lại</a></p>"
+                + "<p><a href='lamanpos://settings'>Cài đặt ứng dụng</a></p></body></html>";
+        try {
+            return "data:text/html;charset=utf-8;base64," + Base64.encodeToString(html.getBytes("UTF-8"), Base64.NO_WRAP);
+        } catch (Exception e) {
+            return "about:blank";
+        }
+    }
+
     private void showMenu() {
         String[] items = {"Tải lại trang", "In thử máy in tích hợp", "Đổi địa chỉ trang web…"};
         new AlertDialog.Builder(this)
                 .setTitle("Lam An POS")
                 .setMessage(deviceLine())
                 .setItems(items, (d, which) -> {
-                    if (which == 0) web.loadUrl(startUrl());
+                    if (which == 0) session.loadUri(startUrl());
                     else if (which == 1) testPrint();
                     else askBaseUrl();
                 })
@@ -288,37 +327,10 @@ public class MainActivity extends Activity {
                         return;
                     }
                     prefs.edit().putString("base", v).apply();
-                    web.loadUrl(startUrl());
+                    session.loadUri(startUrl());
                 })
                 .setNegativeButton("Hủy", null)
                 .show();
-    }
-
-    private void download(String url, String userAgent, String contentDisposition, String mimeType) {
-        if (url.startsWith("blob:") || url.startsWith("data:")) {
-            toast("Ứng dụng chưa tải được file tạo trên trang. Hãy xuất dữ liệu ở bản Lite hoặc trên máy tính.");
-            return;
-        }
-        if (Build.VERSION.SDK_INT >= 23 && Build.VERSION.SDK_INT <= 28
-                && checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, 1);
-            toast("Cho phép lưu file rồi bấm tải lại.");
-            return;
-        }
-        try {
-            String name = URLUtil.guessFileName(url, contentDisposition, mimeType);
-            DownloadManager.Request req = new DownloadManager.Request(Uri.parse(url));
-            req.addRequestHeader("Cookie", CookieManager.getInstance().getCookie(url));
-            req.addRequestHeader("User-Agent", userAgent);
-            req.setMimeType(mimeType);
-            req.setTitle(name);
-            req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
-            req.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, name);
-            ((DownloadManager) getSystemService(DOWNLOAD_SERVICE)).enqueue(req);
-            toast("Đang tải " + name + " vào thư mục Download.");
-        } catch (Exception e) {
-            toast("Không tải được file: " + e.getMessage());
-        }
     }
 
     private void toast(String msg) {
@@ -354,7 +366,7 @@ public class MainActivity extends Activity {
     @Override
     public boolean onKeyUp(int keyCode, KeyEvent event) {
         if (keyCode == KeyEvent.KEYCODE_BACK && event.isTracking() && !event.isCanceled()) {
-            if (web.canGoBack()) web.goBack();
+            if (canGoBack) session.goBack();
             else moveTaskToBack(true);
             return true;
         }
@@ -362,15 +374,10 @@ public class MainActivity extends Activity {
     }
 
     @Override
-    protected void onSaveInstanceState(Bundle outState) {
-        super.onSaveInstanceState(outState);
-        web.saveState(outState);
-    }
-
-    @Override
     protected void onDestroy() {
         printer.disconnect();
-        web.destroy();
+        if (session != null) session.close();
+        worker.shutdown();
         super.onDestroy();
     }
 }

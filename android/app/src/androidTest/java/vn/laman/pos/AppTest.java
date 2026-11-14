@@ -13,13 +13,10 @@ import org.json.JSONObject;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
 
 /** Runs on an Android 6 (API 23) emulator in CI — same Android version as the SUNMI T1. */
 @RunWith(AndroidJUnit4.class)
@@ -30,56 +27,47 @@ public class AppTest {
         return ApplicationProvider.getApplicationContext();
     }
 
-    private static String js(ActivityScenario<MainActivity> sc, String script) throws Exception {
-        final String[] out = {null};
-        final CountDownLatch done = new CountDownLatch(1);
-        sc.onActivity(a -> a.getWebView().evaluateJavascript(script, v -> {
-            out[0] = v;
-            done.countDown();
-        }));
-        done.await(15, TimeUnit.SECONDS);
-        return out[0];
-    }
-
-    /** The bug report: "network error" on Android 6 because Let's Encrypt roots are not trusted. */
+    /**
+     * The bug report: "network error" on Android 6 (Let's Encrypt roots not trusted, WebView too old).
+     * With GeckoView the full web app must load over HTTPS, render, and see window.LamAnAndroid.
+     */
     @Test
-    public void fullWebAppLoadsOverHttpsOnAndroid6() throws Exception {
+    public void fullWebAppLoadsOverHttpsWithPrinterBridgeOnAndroid6() throws Exception {
+        MainActivity.lastPageState = null;
         try (ActivityScenario<MainActivity> sc = ActivityScenario.launch(MainActivity.class)) {
             String state = null;
-            for (int i = 0; i < 90; i++) {
-                state = js(sc, "(function(){return JSON.stringify({title:document.title,url:location.href,login:!!document.querySelector('#cloud-login'),app:!!document.querySelector('#app'),text:(document.body&&document.body.innerText||'').slice(0,160),ua:navigator.userAgent,bridge:typeof window.LamAnAndroid})})()");
-                if (state != null && state.contains("\\\"login\\\":true")) break;
+            for (int i = 0; i < 150; i++) {
+                state = MainActivity.lastPageState;
+                if (state != null && state.contains("\"login\":true")) break;
                 Thread.sleep(1000);
             }
             Log.i(TAG, "page state: " + state);
-            JSONObject o = new JSONObject(new JSONArray("[" + state + "]").getString(0));
-            Log.i(TAG, "webview UA: " + o.optString("ua"));
+            assertNotNull("The page never reported its state (extension not injected or page did not load)", state);
+            JSONObject o = new JSONObject(state);
             assertTrue("Full web app did not render the login form: " + o, o.optBoolean("login"));
             assertEquals("Lam An · Quầy bán hàng", o.optString("title"));
-            assertTrue(o.optString("ua").contains("LamAnPOS/"));
-            assertEquals("object", o.optString("bridge"));
-            String info = js(sc, "LamAnAndroid.info()");
-            Log.i(TAG, "bridge info: " + info);
-            assertTrue(info.contains("lam-an-pos"));
+            assertTrue(o.optString("url").startsWith("https://orderbaobao.vercel.app/"));
+            assertEquals("window.LamAnAndroid visible to the page", "function", o.optString("bridge"));
         }
     }
 
     @Test
-    public void bundledIsrgRootsValidateVercelChain() throws Exception {
-        String sha = TlsCompat.verifiedLeafSha256(ctx(), "orderbaobao.vercel.app");
-        Log.i(TAG, "orderbaobao.vercel.app leaf sha256 " + sha);
-        assertEquals(64, sha.length());
-    }
-
-    @Test
-    public void invalidCertificatesAreStillRejected() {
-        for (String host : new String[]{"untrusted-root.badssl.com", "expired.badssl.com", "wrong.host.badssl.com", "self-signed.badssl.com"}) {
-            try {
-                TlsCompat.verifiedLeafSha256(ctx(), host);
-                fail("Accepted invalid certificate for " + host);
-            } catch (Exception expected) {
-                Log.i(TAG, host + " rejected: " + expected.getClass().getSimpleName());
-            }
+    public void bridgeAnswersOnlyTheShopSite() throws Exception {
+        try (ActivityScenario<MainActivity> sc = ActivityScenario.launch(MainActivity.class)) {
+            final String[] r = new String[3];
+            sc.onActivity(a -> {
+                r[0] = a.answer("info", "", "https://orderbaobao.vercel.app/");
+                r[1] = a.answer("printBase64", "G0A=", "https://evil.example/");
+                r[2] = a.answer("info", "", "http://orderbaobao.vercel.app/");
+            });
+            Thread.sleep(100);
+            Log.i(TAG, "info via bridge: " + r[0]);
+            JSONObject info = new JSONObject(r[0]);
+            assertEquals("lam-an-pos", info.getString("app"));
+            assertEquals("gecko", info.getString("engine"));
+            assertEquals("none", info.getString("printer")); // emulator has no SUNMI printer
+            assertFalse(new JSONObject(r[1]).getBoolean("ok"));
+            assertFalse(new JSONObject(r[2]).getBoolean("ok"));
         }
     }
 
@@ -137,13 +125,14 @@ public class AppTest {
     @Test
     public void printLinksAreHandledInsideTheApp() throws Exception {
         try (ActivityScenario<MainActivity> sc = ActivityScenario.launch(MainActivity.class)) {
-            final boolean[] handled = new boolean[4];
+            final boolean[] handled = new boolean[5];
             String data = Base64.encodeToString("[[[\"Lam An\",1,0]]]".getBytes("UTF-8"), Base64.URL_SAFE | Base64.NO_WRAP | Base64.NO_PADDING);
             sc.onActivity(a -> {
                 handled[0] = a.handleUrl("lamanpos://print-lines?paper=58&data=" + data);
                 handled[1] = a.handleUrl("intent:base64,G0A=#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;");
                 handled[2] = !a.handleUrl("https://orderbaobao.vercel.app/lite");
-                handled[3] = a.handleUrl("lamanpos://unknown");
+                handled[3] = !a.handleUrl("https://abc.supabase.co/rest/v1/rpc/x");
+                handled[4] = a.handleUrl("lamanpos://unknown");
             });
             for (boolean h : handled) assertTrue(h);
             Thread.sleep(3000); // background print threads finish without crashing the app

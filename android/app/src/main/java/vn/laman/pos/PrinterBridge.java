@@ -18,13 +18,12 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * Bridge between the web app and the SUNMI built-in thermal printer.
- * Exposed to JavaScript as window.LamAnAndroid (info(), printBase64()).
+ * Exposed to the page as window.LamAnAndroid (info(), printBase64()) by the built-in WebExtension.
  * The web app sends ready-made ESC/POS bytes (GS v 0 raster for Vietnamese text).
  */
 public class PrinterBridge {
     private final Context context;
     private volatile SunmiPrinterService service;
-    private volatile int webViewVersion;
     private final InnerPrinterCallback callback = new InnerPrinterCallback() {
         @Override
         protected void onConnected(SunmiPrinterService s) {
@@ -39,10 +38,6 @@ public class PrinterBridge {
 
     public PrinterBridge(Context context) {
         this.context = context.getApplicationContext();
-    }
-
-    void setWebViewVersion(int v) {
-        webViewVersion = v;
     }
 
     public void connect() {
@@ -108,7 +103,6 @@ public class PrinterBridge {
             o.put("model", Build.MODEL);
             o.put("manufacturer", Build.MANUFACTURER);
             o.put("android", Build.VERSION.RELEASE);
-            o.put("webview", webViewVersion);
             SunmiPrinterService s = waitService();
             o.put("printer", s != null ? "sunmi" : "none");
             if (s != null) {

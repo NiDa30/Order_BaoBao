@@ -57,10 +57,11 @@ jobs:
           echo "$VERIFY" | grep -q "Verified using v1 scheme (JAR signing): true" || { echo "::error::APK lacks v1 signature for Android 5-6"; echo "$VERIFY"; exit 1; }
           SIGNER="v1+v2 signed, $("$BT/apksigner" verify --print-certs LamAnPOS.apk | grep -m1 "certificate DN" | sed 's/.*certificate DN: //')"
           DEX=$(unzip -p LamAnPOS.apk 'classes*.dex' | strings -n 8)
-          for s in vn/laman/pos/PrinterBridge vn/laman/pos/TlsCompat com/sunmi/peripheral/printer/InnerPrinterManager woyou.aidlservice.jiuiv5 LamAnAndroid; do
+          for s in vn/laman/pos/PrinterBridge vn/laman/pos/GeckoPrompts org/mozilla/geckoview/GeckoSession com/sunmi/peripheral/printer/InnerPrinterManager woyou.aidlservice.jiuiv5; do
             echo "$DEX" | grep -q "$s" || { echo "::error::missing $s"; exit 1; }
           done
-          unzip -l LamAnPOS.apk | grep -q "res/.*isrg_root_x1" || unzip -l LamAnPOS.apk | grep -q "isrg" || { echo "::error::bundled ISRG roots missing"; exit 1; }
+          unzip -l LamAnPOS.apk | grep -q "assets/lamanpos/content.js" || { echo "::error::bridge extension missing"; exit 1; }
+          unzip -l LamAnPOS.apk | grep -q "lib/armeabi-v7a/libxul.so" || { echo "::error::GeckoView native library missing"; exit 1; }
           echo "::notice title=APK::$INFO | $(stat -c %s LamAnPOS.apk) bytes | $SIGNER"
 
       - uses: actions/upload-artifact@v4

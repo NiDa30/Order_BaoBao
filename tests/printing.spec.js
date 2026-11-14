@@ -202,3 +202,34 @@ test('inside the Lam An POS Android app the built-in SUNMI printer is detected a
   expect([...bytes.subarray(0, 2)]).toEqual([0x1b, 0x40]);
   expect(bytes.includes(Buffer.from([0x1d, 0x76, 0x30, 0x00, 72, 0]))).toBe(true); // 576-dot raster rows for 80mm
 });
+
+test('GeckoView build: bridge methods return Promises and printing still works', async ({ page, context }) => {
+  await page.addInitScript(() => {
+    window.__appPrints = [];
+    window.LamAnAndroid = {
+      info: () => new Promise(r => setTimeout(() => r(JSON.stringify({ app: 'lam-an-pos', version: '1.0.9', engine: 'gecko', model: 'T1-G', manufacturer: 'SUNMI', android: '6.0.1', printer: 'sunmi', status: 1, statusText: 'Máy in sẵn sàng', paper: 58 })), 30)),
+      printBase64: b64 => new Promise(r => setTimeout(() => { window.__appPrints.push(b64); r(JSON.stringify({ ok: true, confirmed: true, message: 'Đã in trên máy in tích hợp.' })); }, 30)),
+    };
+  });
+  await mock(context, { workspace: null });
+  await login(page);
+  await openPrinter(page);
+  const dialog = page.locator('#printer-dialog');
+  await expect(dialog).toContainText('Đang chạy trong ứng dụng Lam An POS 1.0.9');
+  await expect(dialog.locator('#printer-paper')).toContainText('Tự động (58mm)');
+  await dialog.locator('#printer-auto').check();
+  await dialog.getByRole('button', { name: 'Đóng', exact: true }).click();
+  await page.getByRole('button', { name: '＋ Tạo đơn mới', exact: true }).click();
+  await page.getByRole('button', { name: /Cà phê Cà phê sữa/ }).click();
+  await page.getByRole('button', { name: 'Lưu đơn hàng' }).click();
+  await page.locator('.order-card').click();
+  await page.getByRole('button', { name: '✓ Xác nhận đã thanh toán' }).click();
+  await expect.poll(() => page.evaluate(() => window.__appPrints.length)).toBe(1); // auto-print after payment
+  await page.locator('.order-card').click();
+  await page.getByRole('button', { name: '🖨︎ In bill cho khách' }).click();
+  await expect.poll(() => page.evaluate(() => window.__appPrints.length)).toBe(2);
+  const bytes = Buffer.from((await page.evaluate(() => window.__appPrints[1])), 'base64');
+  expect([...bytes.subarray(0, 2)]).toEqual([0x1b, 0x40]);
+  expect(bytes.includes(Buffer.from([0x1d, 0x76, 0x30, 0x00, 48, 0]))).toBe(true); // 384-dot rows for 58mm
+  await expect(page.locator('#toast')).toContainText('Đã gửi bill tới máy in');
+});
