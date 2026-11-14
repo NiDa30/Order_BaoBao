@@ -28,6 +28,8 @@ android {
                 keyAlias System.getenv('KEY_ALIAS')
                 keyPassword System.getenv('KEY_PASSWORD')
             }
+            enableV1Signing true // required by Android 5–6 (SUNMI T1)
+            enableV2Signing true
         }
     }
 
