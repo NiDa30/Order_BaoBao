@@ -178,3 +178,27 @@ test('a previously paired USB printer is detected and confirms the bytes it rece
   await dialog.getByRole('button', { name: /Đổi sang (58|80)mm/ }).click();
   await expect(dialog.locator('#printer-paper')).not.toHaveValue('');
 });
+
+test('inside the Lam An POS Android app the built-in SUNMI printer is detected and receives ESC/POS', async ({ page, context }) => {
+  await page.addInitScript(() => {
+    window.__appPrints = [];
+    window.LamAnAndroid = {
+      info: () => JSON.stringify({ app: 'lam-an-pos', version: '1.0.7', model: 'T1-G', manufacturer: 'SUNMI', android: '6.0.1', printer: 'sunmi', status: 1, statusText: 'Máy in sẵn sàng', paper: 80 }),
+      printBase64: b64 => { window.__appPrints.push(b64); return JSON.stringify({ ok: true, confirmed: true, message: 'Đã in trên máy in tích hợp.' }); },
+    };
+  });
+  await mock(context, { workspace: null });
+  await login(page);
+  await openPrinter(page);
+  const dialog = page.locator('#printer-dialog');
+  await expect(dialog).toContainText('SUNMI T1-G');
+  await expect(dialog).toContainText('Đang chạy trong ứng dụng Lam An POS 1.0.7');
+  await expect(dialog).toContainText('đang dùng: Máy in tích hợp');
+  await expect(dialog.locator('#printer-paper')).toContainText('Tự động (80mm)');
+  await dialog.getByRole('button', { name: '🖨︎ In thử' }).click();
+  await expect(dialog).toContainText('Máy in đã nhận dữ liệu');
+  const [b64] = await page.evaluate(() => window.__appPrints);
+  const bytes = Buffer.from(b64, 'base64');
+  expect([...bytes.subarray(0, 2)]).toEqual([0x1b, 0x40]);
+  expect(bytes.includes(Buffer.from([0x1d, 0x76, 0x30, 0x00, 72, 0]))).toBe(true); // 576-dot raster rows for 80mm
+});

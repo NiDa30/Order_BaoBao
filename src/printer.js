@@ -9,12 +9,21 @@ import { textJob, imageJob, packMonochrome, toBase64 } from './escpos.js';
 export const PRINTER_KEY = 'lam-an-printer-v1';
 export const DRIVERS = {
   auto: 'Tự động',
+  android: 'Máy in tích hợp (ứng dụng Lam An POS)',
   rawbt: 'Ứng dụng RawBT (máy in tích hợp / Bluetooth)',
   usb: 'USB trực tiếp (WebUSB)',
   serial: 'Bluetooth / cổng Serial (Web Serial)',
   system: 'Hộp thoại in của hệ thống',
 };
 export const RAWBT_PLAY = 'https://play.google.com/store/apps/details?id=ru.a402d.rawbtprinter';
+// Android app for POS terminals (built by .github/workflows/android.yml).
+export const APP_APK = 'https://github.com/NiDa30/Order_BaoBao/releases/latest/download/LamAnPOS.apk';
+/** window.LamAnAndroid is injected by the Lam An POS Android app (android/). */
+export function appBridge(win = globalThis) {
+  const b = win.LamAnAndroid;
+  if (!b || typeof b.info !== 'function') return null;
+  try { return { bridge: b, info: JSON.parse(b.info()) }; } catch { return null; }
+}
 const SPP = '00001101-0000-1000-8000-00805f9b34fb';
 export const defaultSettings = () => ({ driver: 'auto', paper: null, mode: 'image', copies: 1, autoPrint: false, baudRate: 9600, shop: { ...DEFAULT_SHOP }, lastTest: null });
 
@@ -83,28 +92,33 @@ const serialName = p => {
 export async function detect(nav = globalThis.navigator) {
   let model = '';
   try { model = (await nav.userAgentData?.getHighEntropyValues?.(['model']))?.model || ''; } catch { /* hints are optional */ }
-  const device = classifyDevice({ ua: nav.userAgent || '', model });
-  const caps = { usb: !!nav.usb, serial: !!nav.serial, print: typeof globalThis.print === 'function' };
+  const app = appBridge();
+  const device = classifyDevice({ ua: nav.userAgent || '', model: app?.info.model || model });
+  if (app?.info.paper === 58 || app?.info.paper === 80) device.suggestedPaper = app.info.paper;
+  const caps = { usb: !!nav.usb, serial: !!nav.serial, print: typeof globalThis.print === 'function', app: !!app, appPrinter: app?.info.printer === 'sunmi' };
   let usb = [], serial = [];
   try { usb = caps.usb ? (await nav.usb.getDevices()).filter(isPrinterUsb) : []; } catch { usb = []; }
   try { serial = caps.serial ? await nav.serial.getPorts() : []; } catch { serial = []; }
-  const recommended = usb.length ? 'usb' : serial.length ? 'serial' : device.android ? 'rawbt' : 'system';
+  const recommended = caps.appPrinter ? 'android' : usb.length ? 'usb' : serial.length ? 'serial' : device.android ? 'rawbt' : 'system';
   return {
     device,
     caps,
     usb: usb.map(d => ({ name: usbName(d), device: d })),
     serial: serial.map(p => ({ name: serialName(p), port: p })),
     recommended,
-    notes: recommendationNotes(device, caps, recommended),
+    app: app?.info || null,
+    notes: recommendationNotes(device, caps, recommended, app?.info),
   };
 }
 
-export function recommendationNotes(device, caps, recommended) {
+export function recommendationNotes(device, caps, recommended, app = null) {
   const notes = [];
+  if (app) notes.push(app.printer === 'sunmi' ? `Đang chạy trong ứng dụng Lam An POS ${app.version || ''}: in thẳng bằng máy in tích hợp (${app.statusText || 'đã kết nối'}), có dấu tiếng Việt, không cần RawBT.` : 'Đang chạy trong ứng dụng Lam An POS nhưng không tìm thấy máy in tích hợp SUNMI. Có thể dùng RawBT hoặc máy in USB/Bluetooth.');
   if (device.isPos) notes.push(`Đây là máy POS ${device.vendor}${device.model ? ' ' + device.model : ''} (${device.kind === 'desktop' ? 'để bàn' : 'cầm tay'}), thường có máy in nhiệt ${device.suggestedPaper}mm tích hợp.`);
   else if (device.android) notes.push('Thiết bị Android chưa có trong danh sách máy POS đã biết. Vẫn in được nếu máy có máy in tích hợp hoặc kết nối máy in Bluetooth/USB.');
   else notes.push('Không phải thiết bị Android: dùng máy in đã cài trên máy tính qua hộp thoại in, hoặc máy in nhiệt USB qua WebUSB.');
   if (recommended === 'rawbt') notes.push('Đề xuất: cài ứng dụng RawBT, chọn máy in tích hợp (InnerPrinter/USB) trong RawBT rồi bấm In thử. RawBT nhận lệnh in trực tiếp, không hiện hộp thoại.');
+  if (!app && device.android && device.isPos) notes.push('Máy POS Android đời cũ (ví dụ SUNMI T1, Android 6) không cài được RawBT: cài ứng dụng Lam An POS (nút Tải ứng dụng bên dưới) để in thẳng bằng máy in tích hợp.');
   if (recommended === 'usb') notes.push('Đã tìm thấy máy in USB được cấp quyền trước đó, in trực tiếp không cần hộp thoại.');
   if (recommended === 'serial') notes.push('Đã có cổng Serial/Bluetooth được cấp quyền trước đó.');
   if (!caps.usb && !caps.serial) notes.push('Trình duyệt này không hỗ trợ WebUSB/Web Serial. Dùng Chrome bản mới nhất để có thêm cách kết nối trực tiếp.');
@@ -248,6 +262,12 @@ export async function send(jobs, settings, detection, { win = globalThis, fallba
       return { ok: true, driver, confirmed: false, message: 'Đã mở hộp thoại in. Chọn máy in của máy POS rồi bấm In.' };
     }
     const bytes = concat(list.map(b => buildJob(b, { paper, mode, doc: win.document }).bytes));
+    if (driver === 'android') {
+      const app = appBridge(win);
+      if (!app) return { ok: false, driver, message: 'Chỉ dùng được trong ứng dụng Lam An POS trên máy POS.' };
+      const r = JSON.parse(app.bridge.printBase64(toBase64(bytes)));
+      return { ok: !!r.ok, driver, confirmed: !!r.ok, message: r.message || (r.ok ? 'Đã in.' : 'In không thành công.') };
+    }
     if (driver === 'rawbt') {
       const a = win.document.createElement('a'); // Chrome Android hands intent: links to the RawBT app
       a.href = rawbtUrl(bytes, { fallback });

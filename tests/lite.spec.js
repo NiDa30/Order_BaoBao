@@ -239,3 +239,40 @@ test('blocked accounts see no data; account page changes password and bill paper
   await login(page, `admin@${d}`, 'new-password-123');
   await expect(page.locator('.top')).toContainText('Admin');
 });
+
+test.describe('inside the Android app', () => {
+  test.use({ userAgent: 'Mozilla/5.0 (Linux; Android 6.0.1; T1-G Build/MMB29M; wv) AppleWebKit/537.36 Chrome/106.0 Mobile Safari/537.36 LamAnPOS/1.0.7' });
+  test('Lite bill prints through the app with Vietnamese text', async ({ page, request }) => {
+    const d = domain();
+    await login(page, `admin@${d}`);
+    await page.getByRole('link', { name: '＋ Tạo đơn mới' }).click();
+    await page.getByLabel('Tên khách hàng').fill('Chị Linh');
+    await page.locator('input[name=q_m1]').fill('2');
+    await page.getByRole('button', { name: 'Lưu đơn hàng' }).click();
+    await page.getByRole('link', { name: '🖨 In phiếu tạm tính' }).click();
+    await expect(page.getByRole('link', { name: '🖨 In qua RawBT' })).toHaveCount(0);
+    const href = await page.getByRole('link', { name: '🖨 In bằng máy in tích hợp' }).getAttribute('href');
+    const u = new URL(href);
+    expect(u.protocol).toBe('lamanpos:');
+    expect(u.searchParams.get('paper')).toBe('58');
+    const pages = JSON.parse(Buffer.from(u.searchParams.get('data'), 'base64url').toString('utf8'));
+    expect(pages).toHaveLength(1);
+    expect(pages[0].map(l => l[0]).join('\n')).toContain('PHIẾU TẠM TÍNH');
+    expect(pages[0].find(l => l[0].includes('PHIẾU TẠM TÍNH'))[2]).toBe(1); // tall
+    expect(pages[0].every(l => [...l[0]].length === (l[2] === 2 ? 16 : 32))).toBe(true);
+    await page.locator('.nav').getByRole('link', { name: 'Tài khoản', exact: true }).click();
+    await expect(page.getByRole('link', { name: /Cài đặt ứng dụng/ })).toHaveAttribute('href', 'lamanpos://settings');
+  });
+});
+
+test.describe('on an Android POS without the app', () => {
+  test.use({ userAgent: 'Mozilla/5.0 (Linux; Android 6.0.1; T1-G Build/MMB29M) AppleWebKit/537.36 Chrome/106.0 Safari/537.36' });
+  test('Lite bill offers the Android app download', async ({ page }) => {
+    await login(page, `admin@${domain()}`);
+    await page.getByRole('link', { name: '＋ Tạo đơn mới' }).click();
+    await page.locator('input[name=q_m1]').fill('1');
+    await page.getByRole('button', { name: 'Lưu đơn hàng' }).click();
+    await page.getByRole('link', { name: '🖨 In phiếu tạm tính' }).click();
+    await expect(page.getByRole('link', { name: 'Tải ứng dụng Lam An POS' })).toHaveAttribute('href', 'https://github.com/NiDa30/Order_BaoBao/releases/latest/download/LamAnPOS.apk');
+  });
+});

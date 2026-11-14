@@ -48,6 +48,17 @@ jobs:
       - name: Collect APK
         run: cp android/app/build/outputs/apk/release/app-release.apk LamAnPOS.apk
 
+      - name: Verify APK
+        run: |
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          INFO=$("$BT/aapt2" dump badging LamAnPOS.apk | grep -E "^(package|sdkVersion|targetSdkVersion|application-label):" | tr '\n' ' ')
+          SIGNER=$("$BT/apksigner" verify --print-certs LamAnPOS.apk | grep -m1 "certificate DN" || true)
+          DEX=$(unzip -p LamAnPOS.apk 'classes*.dex' | strings -n 8)
+          for s in vn/laman/pos/PrinterBridge com/sunmi/peripheral/printer/InnerPrinterManager woyou.aidlservice.jiuiv5 LamAnAndroid; do
+            echo "$DEX" | grep -q "$s" || { echo "::error::missing $s"; exit 1; }
+          done
+          echo "::notice title=APK::$INFO | $(stat -c %s LamAnPOS.apk) bytes | $SIGNER"
+
       - uses: actions/upload-artifact@v4
         with:
           name: LamAnPOS-${{ github.run_number }}
