@@ -7,7 +7,7 @@ def keystoreFile = System.getenv('KEYSTORE_FILE')
 
 android {
     namespace 'vn.laman.pos'
-    compileSdk 35
+    compileSdk 36
 
     defaultConfig {
         applicationId 'vn.laman.pos'
