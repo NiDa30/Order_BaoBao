@@ -135,8 +135,65 @@ jobs:
                       print(f"::notice title=test passed::{name}")
           PY
 
+  device-test-broken-dns:
+    # Same tests with an unreachable DNS server (like a shop network that cannot resolve *.vercel.app):
+    # the app must still open the full web app thanks to DNS over HTTPS.
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Build test APKs
+        run: gradle -p android assembleDebug assembleDebugAndroidTest --no-daemon
+
+      - name: Android 6 emulator tests without working DNS
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 23
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -dns-server 10.255.255.1
+          script: |
+            adb logcat -c || true
+            gradle -p android connectedDebugAndroidTest --no-daemon -Pandroid.testInstrumentationRunnerArguments.brokenDns=true -Pandroid.testInstrumentationRunnerArguments.class=vn.laman.pos.AppTest#dnsOverHttpsResolvesTheShopSite,vn.laman.pos.AppTest#fullWebAppLoadsOverHttpsWithPrinterBridgeOnAndroid6 || touch tests-failed
+            adb logcat -d -s LamAnTest:I > lamantest.txt || true
+            test ! -f tests-failed
+
+      - name: Report device tests
+        if: always()
+        run: |
+          [ -f lamantest.txt ] && grep "LamAnTest" lamantest.txt | sed -E 's/^.*LamAnTest[^:]*: //' | cut -c1-900 | while read -r line; do echo "::notice title=no-dns device::$line"; done || true
+          python3 - <<'PY'
+          import glob, xml.etree.ElementTree as ET
+          for f in glob.glob('android/app/build/outputs/androidTest-results/connected/**/*.xml', recursive=True):
+              for tc in ET.parse(f).getroot().iter('testcase'):
+                  fail = tc.find('failure')
+                  name = tc.get('name')
+                  if fail is not None:
+                      msg = (fail.get('message') or fail.text or '').strip().replace('\n', ' ')[:900]
+                      print(f"::error title=no-dns {name}::{msg}")
+                  else:
+                      print(f"::notice title=no-dns test passed::{name}")
+          PY
+
   release:
-    needs: [build, device-test]
+    needs: [build, device-test, device-test-broken-dns]
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
