@@ -1,0 +1,53 @@
+plugins {
+    id 'com.android.application'
+}
+
+def buildNumber = (System.getenv('VERSION_CODE') ?: '1') as int
+def keystoreFile = System.getenv('KEYSTORE_FILE')
+
+android {
+    namespace 'vn.laman.pos'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'vn.laman.pos'
+        minSdk 21
+        targetSdk 34
+        versionCode buildNumber
+        versionName "1.0.${buildNumber}"
+        buildConfigField 'String', 'DEFAULT_URL', '"https://orderbaobao.vercel.app"'
+    }
+
+    buildFeatures { buildConfig true }
+
+    signingConfigs {
+        release {
+            if (keystoreFile) {
+                storeFile file(keystoreFile)
+                storePassword System.getenv('KEYSTORE_PASSWORD')
+                keyAlias System.getenv('KEY_ALIAS')
+                keyPassword System.getenv('KEY_PASSWORD')
+            }
+            enableV1Signing true // required by Android 5–6 (SUNMI T1)
+            enableV2Signing true
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            // Without a release keystore (GitHub secrets) the APK is signed with the debug key.
+            signingConfig keystoreFile ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}
+
+dependencies {
+    // Official SUNMI built-in printer SDK (binds woyou.aidlservice.jiuiv5).
+    implementation 'com.sunmi:printerlibrary:1.0.15'
+}

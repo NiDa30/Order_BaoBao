@@ -6,7 +6,7 @@ import { buildExport } from '../data-export.js';
 import { seed } from '../seed-menu.js';
 import { layout, receiptBlocks, PAPERS, DEFAULT_SHOP } from '../receipt.js';
 import { textJob } from '../escpos.js';
-import { rawbtUrl } from '../printer.js';
+import { rawbtUrl, APP_APK } from '../printer.js';
 import { createSupabase, friendlyError } from './supabase.js';
 import { LiteError, createOrder, editOrder, payOrder, cancelOrder, openShift, closeShift, menuItem } from './actions.js';
 import * as V from './views.js';
@@ -43,6 +43,8 @@ export function createLiteApp({ supabaseUrl, supabaseKey, fetchImpl, clock = () 
     const flash = cookies[COOKIE.flash] ? unb64(cookies[COOKIE.flash]) : null;
     if (flash) cookie(COOKIE.flash, null);
     const now = clock(), ctx = { csrf, flash, now: now.toISOString(), today: dateKey(now), uuid, access: null };
+    ctx.inApp = /LamAnPOS\//.test(String(req.headers?.['user-agent'] || ''));
+    ctx.android = /Android/i.test(String(req.headers?.['user-agent'] || ''));
     const print = { ...defaultPrint(), ...(unb64(cookies[COOKIE.print]) || {}) };
     print.shop = { ...DEFAULT_SHOP, ...(print.shop || {}) };
 
@@ -271,7 +273,10 @@ export function createLiteApp({ supabaseUrl, supabaseKey, fetchImpl, clock = () 
         const { chars } = PAPERS[print.paper] || PAPERS[58];
         const copies = Array.from({ length: print.copies }, (_, i) => layout(receiptBlocks(o, { shop: print.shop, cashier: cashierOf(o), copy: i + 1, copies: print.copies }), chars));
         const bytes = Buffer.concat(copies.map(lines => Buffer.from(textJob(lines))));
-        return html(V.billPage(ctx, o, { lines: copies[0], rawbtText: rawbtUrl(new Uint8Array(bytes)), paper: print.paper, copies: print.copies }));
+        // Inside the Android app the bill is rendered by the app with the Vietnamese font (lamanpos://print-lines).
+        const pages = copies.map(lines => lines.map(l => [l.text, l.bold ? 1 : 0, l.size === 'tall' ? 1 : l.size === 'big' ? 2 : 0]));
+        const appLink = `lamanpos://print-lines?paper=${print.paper}&data=${Buffer.from(JSON.stringify(pages)).toString('base64url')}`;
+        return html(V.billPage(ctx, o, { lines: copies[0], rawbtText: rawbtUrl(new Uint8Array(bytes)), appLink, apk: APP_APK, paper: print.paper, copies: print.copies }));
       }
       case 'history': return html(V.historyPage(ctx, { q: q.get('q') || '', d: isDay(q.get('d')) ? q.get('d') : '', s: shiftParam(q.get('s')) || '' }));
       case 'menu': return html(V.menuPage(ctx, { editId: q.get('edit') || '' }));

@@ -108,6 +108,19 @@ Playwright chạy trên desktop 1440px và điện thoại 390px, dùng API/auth
 
 `test:db` dùng Docker/PostgreSQL 17 tạm, không mở cổng host, chạy migrations hai lần và kiểm tra CAS, tổng tiền, role escalation, lọc ca từ DB, chống giả mạo tài khoản thao tác, khóa tài khoản, paid edit, refund/cancel, đề xuất/duyệt menu, đối chiếu và điều chỉnh ca. Không thay thế kiểm tra trên Supabase thật sau khi áp dụng migration và deploy function.
 
+## Ứng dụng Android cho máy POS (SUNMI…)
+
+Máy POS Android đời cũ như **SUNMI T1 (Android 6)** không cài được RawBT, và trình duyệt không tự gửi lệnh được tới máy in tích hợp. Ứng dụng **Lam An POS** (`android/`) mở trang web của quán trong WebView và in thẳng bằng máy in tích hợp qua SDK chính thức `com.sunmi:printerlibrary`.
+
+- **Tải**: <https://github.com/NiDa30/Order_BaoBao/releases/latest/download/LamAnPOS.apk>. Trên máy POS, mở link bằng trình duyệt, cho phép *cài ứng dụng từ nguồn không xác định*, rồi cài. Lần mở đầu chọn **Bản đầy đủ** (khuyên dùng) hoặc **Bản Lite** (máy cũ/WebView quá cũ).
+- **Bản đầy đủ** tự nhận ứng dụng (`window.LamAnAndroid`): mục *Máy in* hiện "Ứng dụng Lam An POS: Có", cách in *Máy in tích hợp*, khổ giấy lấy từ máy in khi SDK hỗ trợ. In thử và in bill gửi ESC/POS ảnh (có dấu) và báo lỗi thật từ máy in (hết giấy, mở nắp…).
+- **Bản Lite** trong ứng dụng có nút *In bằng máy in tích hợp* (`lamanpos://print-lines`); ứng dụng tự vẽ bill bằng font hệ thống nên **in có dấu**.
+- Ứng dụng cũng tự xử lý mọi link RawBT (`intent:…scheme=rawbt`), nên không cần cài RawBT.
+- **Cài đặt ứng dụng**: giữ nút Quay lại (hoặc phím Menu), hoặc *Tài khoản → Cài đặt ứng dụng* (Lite), *Máy in → Cài đặt ứng dụng* (bản đầy đủ): đổi bản đầy đủ/Lite, đổi địa chỉ trang, **In thử máy in tích hợp** (không cần đăng nhập), tải lại.
+- **Build**: `.github/workflows/android.yml` build mỗi khi `android/**` thay đổi trên `main` và đăng release `android-<số>`. Có thể chạy tay ở tab Actions (*Run workflow*).
+- **Khóa ký**: nếu repo có secrets `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` thì APK ký bằng khóa đó (cập nhật đè được). Nếu chưa có, APK ký bằng khóa debug tạm của mỗi lần build: khi cập nhật phải **gỡ bản cũ trước**. Trước khi gỡ, hãy đồng bộ hết dữ liệu (trạng thái *Đã đồng bộ*), vì gỡ ứng dụng xóa dữ liệu lưu trên máy.
+- Trong ứng dụng, file xuất ở bản Lite được lưu vào thư mục Download. Bản đầy đủ tạo file ngay trên trang nên ứng dụng chưa tải được; hãy xuất ở bản Lite hoặc trên máy tính.
+
 ## Bản Lite cho Opera Mini và trình duyệt nhẹ (`/lite`)
 
 Mở `https://<tên-miền>/lite`. Đây là bản dựng sẵn từng trang HTML trên máy chủ (Vercel Function `api/lite.js`), **không cần JavaScript trên trình duyệt**, nên chạy được trên Opera Mini ở chế độ tiết kiệm dữ liệu Extreme, trình duyệt cũ và máy yếu. Mỗi thao tác là một form gửi lên máy chủ rồi tải lại trang.

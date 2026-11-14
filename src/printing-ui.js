@@ -2,7 +2,7 @@
 // opens the dialog, renders it inside the overlay and calls printOrder/afterPay.
 import { layout, PAPERS } from './receipt.js';
 import {
-  DRIVERS, RAWBT_PLAY, detect, receiptImage, loadSettings, saveSettings, send, receiptJobs, testJob, resolveDriver, resolvePaper, pairUsb, pairSerial,
+  DRIVERS, RAWBT_PLAY, APP_APK, detect, receiptImage, loadSettings, saveSettings, send, receiptJobs, testJob, resolveDriver, resolvePaper, pairUsb, pairSerial,
 } from './printer.js';
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -53,6 +53,7 @@ export function createPrinting({ toast, context, open }) {
     return `<div class="printer-facts">
 <div><span>Thiết bị</span><b>${esc([device.vendor, device.model].filter(Boolean).join(' ') || (device.android ? 'Android (không rõ model)' : 'Máy tính / trình duyệt khác'))}</b></div>
 <div><span>Loại</span><b>${device.isPos ? `Máy POS ${device.kind === 'desktop' ? 'để bàn' : 'cầm tay'}` : device.android ? 'Android thường' : 'Không phải Android'}</b></div>
+<div><span>Ứng dụng Lam An POS</span>${yes(caps.app)}${detection.app ? ` <small>${esc(detection.app.version || '')}</small>` : ''}</div><div><span>Máy in tích hợp (app)</span>${yes(caps.appPrinter)}</div>
 <div><span>WebUSB</span>${yes(caps.usb)}</div><div><span>Web Serial</span>${yes(caps.serial)}</div>
 <div><span>Máy in đã cấp quyền</span><b>${esc([...usb, ...serial].map(x => x.name).join(', ') || 'Chưa có')}</b></div>
 <div><span>Đề xuất</span><b>${esc(DRIVERS[recommended])}</b></div></div>
@@ -68,6 +69,7 @@ ${notes.map(n => `<p class="note">${esc(n)}</p>`).join('')}`;
       : 'Máy in không nhận lệnh ESC/POS. Kiểm tra máy in đúng loại nhiệt ESC/POS hoặc đổi sang Hộp thoại in của hệ thống.';
     if (test.verdict === 'cut') advice = paper() === 80 ? 'Máy in có thể là khổ 58mm. Thử đổi khổ giấy sang 58mm rồi in thử lại.' : 'Nếu giấy rộng 80mm, đổi khổ giấy sang 80mm. Nếu là 58mm, kiểm tra cài đặt khổ giấy trong RawBT (384 điểm).';
     if (test.verdict === 'none') advice = {
+      android: 'Kiểm tra giấy, nắp máy in và đèn báo. Trong ứng dụng, giữ nút Quay lại → In thử máy in tích hợp để in trang kiểm tra trực tiếp.',
       rawbt: 'Chưa cài RawBT hoặc RawBT chưa chọn máy in. Cài RawBT, mở ứng dụng, chọn máy in tích hợp (thường tên InnerPrinter) và đặt làm mặc định, rồi in thử lại.',
       usb: 'Kiểm tra cáp/nguồn máy in rồi bấm Kết nối máy in USB lại. Một số máy POS không mở máy in tích hợp cho WebUSB, khi đó dùng RawBT.',
       serial: 'Kiểm tra máy in đã ghép đôi Bluetooth và đang bật. Thử lại tốc độ baud 9600 hoặc 115200, hoặc dùng RawBT.',
@@ -75,7 +77,7 @@ ${notes.map(n => `<p class="note">${esc(n)}</p>`).join('')}`;
     }[driver()];
     const fix = test.verdict === 'garbled' && settings.mode === 'image' ? '<button class="secondary" data-printer-fix="text">Chuyển sang Chữ không dấu</button>'
       : test.verdict === 'cut' ? `<button class="secondary" data-printer-fix="paper">Đổi sang ${paper() === 80 ? 58 : 80}mm</button>`
-      : test.verdict === 'none' && driver() !== 'rawbt' ? '<button class="secondary" data-printer-fix="rawbt">Dùng RawBT</button>' : '';
+      : test.verdict === 'none' && !['rawbt', 'android'].includes(driver()) ? '<button class="secondary" data-printer-fix="rawbt">Dùng RawBT</button>' : '';
     return `<section class="printer-test-result ${r.ok ? '' : 'failed'}" aria-live="polite"><h3>${r.ok ? (r.confirmed ? '✓ Máy in đã nhận dữ liệu' : '↗ Đã gửi lệnh in thử') : '✕ In thử không thành công'}</h3><p>${esc(r.message)}</p>
 ${r.ok && !test.verdict ? `<p><b>Giấy in thử ra thế nào?</b></p><div class="printer-verdicts">${Object.entries(VERDICTS).map(([k, v]) => `<button class="secondary" data-printer-verdict="${k}">${v}</button>`).join('')}</div>` : ''}
 ${advice ? `<p class="${test.verdict === 'ok' ? 'note' : 'warning'}">${esc(advice)}</p>${fix}` : ''}</section>`;
@@ -86,7 +88,7 @@ ${advice ? `<p class="${test.verdict === 'ok' ? 'note' : 'warning'}">${esc(advic
     return `<div class="small-dialog printer-dialog" id="printer-dialog"><div class="dialog-heading"><h2>Máy in bill</h2><button class="icon-button" data-action="dismiss" aria-label="Đóng">×</button></div>
 <p class="muted">Cài đặt lưu riêng trên thiết bị này (mỗi máy POS một máy in).${last ? ` Lần in thử gần nhất: ${new Date(last.at).toLocaleString('vi-VN')} · ${esc(VERDICTS[last.verdict] || 'chưa xác nhận')}.` : ''}</p>
 <h3>Nhận diện</h3>${deviceSection()}
-<div class="printer-actions"><button class="secondary" data-printer-action="scan">↻ Quét lại</button>${detection?.caps.usb ? '<button class="secondary" data-printer-action="pair-usb">Kết nối máy in USB</button>' : ''}${detection?.caps.serial ? '<button class="secondary" data-printer-action="pair-serial">Kết nối Bluetooth/Serial</button>' : ''}${detection?.device.android ? `<a class="secondary" href="${RAWBT_PLAY}" target="_blank" rel="noopener">Cài RawBT</a>` : ''}</div>
+<div class="printer-actions"><button class="secondary" data-printer-action="scan">↻ Quét lại</button>${detection?.caps.usb ? '<button class="secondary" data-printer-action="pair-usb">Kết nối máy in USB</button>' : ''}${detection?.caps.serial ? '<button class="secondary" data-printer-action="pair-serial">Kết nối Bluetooth/Serial</button>' : ''}${detection?.caps.app ? '<a class="secondary" href="lamanpos://settings">Cài đặt ứng dụng</a>' : detection?.device.android ? `<a class="secondary" href="${APP_APK}">Tải ứng dụng Lam An POS</a><a class="secondary" href="${RAWBT_PLAY}" target="_blank" rel="noopener">Cài RawBT</a>` : ''}</div>
 <h3>Cài đặt</h3><form class="printer-form" id="printer-form" onsubmit="return false">
 <label>Cách in<select id="printer-driver">${Object.entries(DRIVERS).map(([k, v]) => `<option value="${k}" ${settings.driver === k ? 'selected' : ''}>${esc(k === 'auto' && detection ? `${v} (đang dùng: ${DRIVERS[detection.recommended].split(' (')[0]})` : v)}</option>`).join('')}</select></label>
 <label>Khổ giấy<select id="printer-paper"><option value="" ${!settings.paper ? 'selected' : ''}>Tự động (${detection?.device.suggestedPaper || 58}mm)</option><option value="58" ${Number(settings.paper) === 58 ? 'selected' : ''}>58mm (32 ký tự)</option><option value="80" ${Number(settings.paper) === 80 ? 'selected' : ''}>80mm (48 ký tự)</option></select></label>

@@ -135,10 +135,14 @@ ${o.status === 'paid' ? `<p class="warn">Cần hoàn ${money(orderTotal(o))} the
 <button type="submit" class="danger">Xác nhận hủy đơn</button>`)}<a class="btn2" href="${link('order', { id: o.id })}">Quay lại</a>` });
 }
 
-export function billPage(ctx, o, { lines, rawbtText, paper, copies }) {
-  return page(ctx, { title: 'In bill', active: 'home', body: `<h1>${o.status === 'paid' ? 'Bill' : 'Phiếu tạm tính'} #${esc(o.code)}</h1>
-<a class="btn" href="${esc(rawbtText)}">🖨 In qua RawBT</a>
+export function billPage(ctx, o, { lines, rawbtText, appLink, apk, paper, copies }) {
+  const buttons = ctx.inApp
+    ? `<a class="btn" href="${esc(appLink)}">🖨 In bằng máy in tích hợp</a><p class="muted">In có dấu tiếng Việt qua ứng dụng Lam An POS. Khổ ${paper}mm · ${copies} liên · <a href="${link('account')}">Đổi cài đặt in</a></p>`
+    : `<a class="btn" href="${esc(rawbtText)}">🖨 In qua RawBT</a>
 <p class="muted">Gửi lệnh in tới ứng dụng RawBT (máy in tích hợp của máy POS, Bluetooth, USB). Bản Lite in chữ không dấu để chạy được không cần JavaScript; muốn in có dấu, dùng bản đầy đủ trên Chrome. Khổ ${paper}mm · ${copies} liên · <a href="${link('account')}">Đổi cài đặt in</a></p>
+${ctx.android ? `<p class="note">Máy POS không cài được RawBT (ví dụ SUNMI T1)? <a href="${esc(apk)}">Tải ứng dụng Lam An POS</a> để in thẳng bằng máy in tích hợp, có dấu.</p>` : ''}`;
+  return page(ctx, { title: 'In bill', active: 'home', body: `<h1>${o.status === 'paid' ? 'Bill' : 'Phiếu tạm tính'} #${esc(o.code)}</h1>
+${buttons}
 <div class="receipt">${esc(lines.map(l => l.text).join('\n'))}</div>
 <p><a href="${link('order', { id: o.id })}">← Về đơn</a></p>` });
 }
@@ -279,5 +283,6 @@ ${form(ctx, 'print-settings', `<h2>Cài đặt in bill (trên máy này)</h2><la
 <label>Tên quán trên bill<input type="text" name="name" maxlength="60" value="${esc(print.shop.name)}"></label><label>Địa chỉ<input type="text" name="address" maxlength="120" value="${esc(print.shop.address)}"></label>
 <label>Số điện thoại<input type="text" name="phone" maxlength="20" value="${esc(print.shop.phone)}"></label><label>Lời chào cuối bill<input type="text" name="footer" maxlength="120" value="${esc(print.shop.footer)}"></label><button type="submit">Lưu cài đặt in</button>`, { cls: 'box' })}
 ${form(ctx, 'password', `<h2>Đổi mật khẩu</h2><label>Mật khẩu mới (ít nhất 8 ký tự)<input type="password" name="password" required autocomplete="new-password"></label><button type="submit">Lưu mật khẩu</button>`, { cls: 'box' })}
+${ctx.inApp ? '<p><a class="btn2" href="lamanpos://settings">Cài đặt ứng dụng (bản đầy đủ/Lite, in thử)</a></p>' : ''}
 ${form(ctx, 'logout', '<button type="submit" class="danger">Đăng xuất</button>')}` });
 }
