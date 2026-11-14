@@ -230,14 +230,18 @@ public class MainActivity extends Activity {
         } catch (Exception e) {
             sb.append("DNS của máy: không phân giải được ").append(host).append(" (").append(why(e)).append(")");
         }
-        Socket sock = new Socket();
-        try {
-            sock.connect(new InetSocketAddress("1.1.1.1", 443), 6000);
-            sb.append("\nKết nối thẳng 1.1.1.1:443: được");
-        } catch (Exception e) {
-            sb.append("\nKết nối thẳng 1.1.1.1:443: lỗi (").append(why(e)).append(")");
-        } finally {
-            try { sock.close(); } catch (Exception ignored) { }
+        // IPv4 vs IPv6: a network where only IPv6 works reaches Google but not IPv4-only sites.
+        String[][] targets = {{"IPv4", "1.1.1.1"}, {"IPv6", "2606:4700:4700::1111"}};
+        for (String[] t : targets) {
+            Socket sock = new Socket();
+            try {
+                sock.connect(new InetSocketAddress(InetAddress.getByName(t[1]), 443), 6000);
+                sb.append("\nKết nối ").append(t[0]).append(" (").append(t[1]).append("): được");
+            } catch (Exception e) {
+                sb.append("\nKết nối ").append(t[0]).append(" (").append(t[1]).append("): lỗi (").append(why(e)).append(")");
+            } finally {
+                try { sock.close(); } catch (Exception ignored) { }
+            }
         }
         // Same idea as GeckoView's DNS over HTTPS, checked here with the system TLS stack (two providers,
         // because old Android may not trust every provider's certificate).
