@@ -126,6 +126,7 @@ public class MainActivity extends Activity {
                     if (!(message instanceof JSONObject)) return;
                     final JSONObject m = (JSONObject) message;
                     final String sender = p.sender == null ? null : p.sender.url;
+                    if (worker.isShutdown()) return; // activity already closed
                     worker.execute(() -> {
                         String result = answer(m.optString("method"), m.optString("arg"), sender);
                         JSONObject reply = new JSONObject();
@@ -134,7 +135,9 @@ public class MainActivity extends Activity {
                             reply.put("result", result);
                         } catch (Exception ignored) {
                         }
-                        runOnUiThread(() -> p.postMessage(reply));
+                        runOnUiThread(() -> {
+                            if (!isFinishing()) p.postMessage(reply);
+                        });
                     });
                 }
 
@@ -189,24 +192,31 @@ public class MainActivity extends Activity {
         } catch (Exception e) {
             sb.append("DNS của máy: không phân giải được ").append(host);
         }
-        sb.append("\nDNS qua HTTPS (1.1.1.1): ");
-        HttpURLConnection c = null;
-        try {
-            c = (HttpURLConnection) new URL(DOH_URL + "?type=A&name=" + host).openConnection();
-            c.setRequestProperty("Accept", "application/dns-json");
-            c.setConnectTimeout(8000);
-            c.setReadTimeout(8000);
-            try (InputStream in = c.getInputStream(); Scanner sc = new Scanner(in, "UTF-8").useDelimiter("\\A")) {
-                String body = sc.hasNext() ? sc.next() : "";
-                java.util.regex.Matcher m = java.util.regex.Pattern.compile("\"data\":\"(\\d+\\.\\d+\\.\\d+\\.\\d+)\"").matcher(body);
-                sb.append(m.find() ? "được → " + m.group(1) : "không có kết quả");
+        // Same idea as GeckoView's DNS over HTTPS, checked here with the system TLS stack (two providers,
+        // because old Android may not trust every provider's certificate).
+        sb.append("\nDNS qua HTTPS: ");
+        String[][] providers = {{"1.1.1.1", DOH_URL + "?type=A&name="}, {"8.8.8.8", "https://8.8.8.8/resolve?type=A&name="}};
+        String failures = "";
+        for (String[] pr : providers) {
+            HttpURLConnection c = null;
+            try {
+                c = (HttpURLConnection) new URL(pr[1] + host).openConnection();
+                c.setRequestProperty("Accept", "application/dns-json");
+                c.setConnectTimeout(8000);
+                c.setReadTimeout(8000);
+                try (InputStream in = c.getInputStream(); Scanner sc = new Scanner(in, "UTF-8").useDelimiter("\\A")) {
+                    String body = sc.hasNext() ? sc.next() : "";
+                    java.util.regex.Matcher m = java.util.regex.Pattern.compile("\"data\":\"(\\d+\\.\\d+\\.\\d+\\.\\d+)\"").matcher(body);
+                    if (m.find()) return sb.append("được (").append(pr[0]).append(") → ").append(m.group(1)).toString();
+                    failures += pr[0] + ": không có kết quả; ";
+                }
+            } catch (Exception e) {
+                failures += pr[0] + ": " + e.getClass().getSimpleName() + "; ";
+            } finally {
+                if (c != null) c.disconnect();
             }
-        } catch (Exception e) {
-            sb.append("bị chặn hoặc lỗi (").append(e.getClass().getSimpleName()).append(")");
-        } finally {
-            if (c != null) c.disconnect();
         }
-        return sb.toString();
+        return sb.append("bị chặn hoặc lỗi (").append(failures).append(")").toString();
     }
 
     private String baseUrl() {

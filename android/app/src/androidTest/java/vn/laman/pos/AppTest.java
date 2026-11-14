@@ -60,7 +60,7 @@ public class AppTest {
     public void dnsOverHttpsResolvesTheShopSite() {
         String diag = MainActivity.diagnose("orderbaobao.vercel.app");
         Log.i(TAG, "dns diagnosis: " + diag.replace("\n", " | "));
-        assertTrue(diag, diag.contains("DNS qua HTTPS (1.1.1.1): được"));
+        assertTrue(diag, diag.contains("DNS qua HTTPS: được"));
         if ("true".equals(InstrumentationRegistry.getArguments().getString("brokenDns"))) {
             assertTrue("device DNS should be broken in this run: " + diag, diag.contains("DNS của máy: không phân giải được"));
         }
