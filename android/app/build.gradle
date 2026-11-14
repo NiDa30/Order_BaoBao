@@ -16,6 +16,7 @@ android {
         versionCode buildNumber
         versionName "1.0.${buildNumber}"
         buildConfigField 'String', 'DEFAULT_URL', '"https://orderbaobao.vercel.app"'
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
     }
 
     buildFeatures { buildConfig true }
@@ -50,4 +51,9 @@ android {
 dependencies {
     // Official SUNMI built-in printer SDK (binds woyou.aidlservice.jiuiv5).
     implementation 'com.sunmi:printerlibrary:1.0.15'
+
+    // Device tests (run on an Android 6 emulator in CI, see .github/workflows/android.yml)
+    androidTestImplementation 'androidx.test:runner:1.5.2'
+    androidTestImplementation 'androidx.test:core:1.5.0'
+    androidTestImplementation 'androidx.test.ext:junit:1.1.5'
 }

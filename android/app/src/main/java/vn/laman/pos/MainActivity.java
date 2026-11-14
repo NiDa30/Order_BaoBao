@@ -10,12 +10,14 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.net.Uri;
+import android.net.http.SslError;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.util.Base64;
 import android.view.KeyEvent;
 import android.webkit.CookieManager;
+import android.webkit.SslErrorHandler;
 import android.webkit.URLUtil;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
@@ -27,12 +29,20 @@ import android.widget.Toast;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
 /**
  * Lam An POS for Android POS terminals: opens the shop's web app and prints bills on the built-in
  * SUNMI printer. Handles RawBT print links itself, so neither the full nor the Lite web version needs RawBT.
+ * Always opens the full version. On Android older than 7.1.1 the Let's Encrypt chain used by Vercel is
+ * validated with bundled ISRG roots (see TlsCompat).
  */
 public class MainActivity extends Activity {
     private static final String PREFS = "lam-an-pos";
+    /** The full web app is built for Chrome 64+ (vite.config.js); older WebViews cannot run it. */
+    static final int MIN_WEBVIEW = 64;
+    private int webViewMajor = 0;
     private WebView web;
     private SharedPreferences prefs;
     private PrinterBridge printer;
@@ -52,6 +62,9 @@ public class MainActivity extends Activity {
         s.setDatabaseEnabled(true);
         s.setLoadWithOverviewMode(true);
         s.setUseWideViewPort(true);
+        Matcher chrome = Pattern.compile("Chrome/(\\d+)").matcher(s.getUserAgentString());
+        webViewMajor = chrome.find() ? Integer.parseInt(chrome.group(1)) : 0;
+        printer.setWebViewVersion(webViewMajor);
         s.setUserAgentString(s.getUserAgentString() + " LamAnPOS/" + BuildConfig.VERSION_NAME);
         CookieManager.getInstance().setAcceptCookie(true);
         if (Build.VERSION.SDK_INT >= 21) CookieManager.getInstance().setAcceptThirdPartyCookies(web, false);
@@ -67,18 +80,54 @@ public class MainActivity extends Activity {
             @Override
             @SuppressWarnings("deprecation")
             public void onReceivedError(WebView view, int errorCode, String description, String failingUrl) {
-                String retry = failingUrl != null && failingUrl.startsWith("http") ? failingUrl : startUrl();
-                view.loadDataWithBaseURL(null, "<html><head><meta name='viewport' content='width=device-width'></head><body style='font-family:sans-serif;padding:24px'>"
-                        + "<h2>Không kết nối được</h2><p>Kiểm tra Wi-Fi hoặc mạng rồi thử lại.</p><p style='color:#777'>" + escape(description) + "</p>"
-                        + "<p><a href='" + escape(retry) + "' style='font-size:20px'>Thử lại</a></p>"
-                        + "<p><a href='lamanpos://settings'>Cài đặt ứng dụng</a></p></body></html>", "text/html", "utf-8", null);
+                showProblem(view, "Không kết nối được", "Kiểm tra Wi-Fi hoặc mạng rồi thử lại.", description + " (" + errorCode + ")",
+                        failingUrl != null && failingUrl.startsWith("http") ? failingUrl : startUrl());
+            }
+
+            @Override
+            public void onReceivedSslError(final WebView view, final SslErrorHandler handler, final SslError error) {
+                // Old Android does not trust Let's Encrypt roots: validate the chain ourselves (TlsCompat).
+                new Thread(() -> {
+                    final boolean ok = TlsCompat.accept(MainActivity.this, error);
+                    runOnUiThread(() -> {
+                        if (ok) {
+                            handler.proceed();
+                            return;
+                        }
+                        handler.cancel();
+                        if (sameSite(Uri.parse(error.getUrl())))
+                            showProblem(view, "Chứng chỉ bảo mật không hợp lệ", "Không thể xác minh kết nối an toàn tới trang của quán. Kiểm tra ngày giờ của máy rồi thử lại.",
+                                    "SSL error " + error.getPrimaryError(), startUrl());
+                    });
+                }).start();
             }
         });
         web.setDownloadListener((url, userAgent, contentDisposition, mimeType, contentLength) -> download(url, userAgent, contentDisposition, mimeType));
 
-        if (savedInstanceState != null) web.restoreState(savedInstanceState);
-        else if (!prefs.contains("url")) chooseVersion(true);
+        if (webViewMajor > 0 && webViewMajor < MIN_WEBVIEW) showOldWebView();
+        else if (savedInstanceState != null) web.restoreState(savedInstanceState);
         else web.loadUrl(startUrl());
+    }
+
+    WebView getWebView() {
+        return web;
+    }
+
+    private String deviceLine() {
+        return Build.MANUFACTURER + " " + Build.MODEL + " · Android " + Build.VERSION.RELEASE + " · WebView " + (webViewMajor > 0 ? webViewMajor : "?") + " · App " + BuildConfig.VERSION_NAME;
+    }
+
+    private void showProblem(WebView view, String title, String text, String detail, String retry) {
+        view.loadDataWithBaseURL(null, "<html><head><meta name='viewport' content='width=device-width'></head><body style='font-family:sans-serif;padding:24px;color:#21362c'>"
+                + "<h2>" + escape(title) + "</h2><p>" + escape(text) + "</p><p style='color:#777;font-size:13px'>" + escape(detail) + "<br>" + escape(deviceLine()) + "</p>"
+                + "<p><a href='" + escape(retry) + "' style='font-size:20px;display:inline-block;background:#245344;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none'>Thử lại</a></p>"
+                + "<p><a href='lamanpos://settings'>Cài đặt ứng dụng</a></p></body></html>", "text/html", "utf-8", null);
+    }
+
+    private void showOldWebView() {
+        showProblem(web, "Trình duyệt hệ thống quá cũ",
+                "Bản đầy đủ cần Android System WebView (Chrome) bản " + MIN_WEBVIEW + " trở lên. Hãy cập nhật \"Android System WebView\" hoặc \"Google Chrome\" trong kho ứng dụng của máy rồi mở lại.",
+                "WebView hiện tại: " + webViewMajor, startUrl());
     }
 
     private String baseUrl() {
@@ -86,7 +135,7 @@ public class MainActivity extends Activity {
     }
 
     private String startUrl() {
-        return prefs.getString("url", baseUrl() + "/");
+        return baseUrl() + "/";
     }
 
     private boolean sameSite(Uri uri) {
@@ -94,7 +143,7 @@ public class MainActivity extends Activity {
         return uri.getHost() != null && uri.getHost().equalsIgnoreCase(base.getHost());
     }
 
-    private boolean handleUrl(String url) {
+    boolean handleUrl(String url) {
         if (url == null) return true;
         // RawBT links produced by the web app ("intent:base64,...#Intent;scheme=rawbt;...") or "rawbt:base64,..."
         if ((url.startsWith("intent:") && url.contains("scheme=rawbt")) || url.startsWith("rawbt:")) {
@@ -111,7 +160,7 @@ public class MainActivity extends Activity {
         if (url.startsWith("lamanpos:")) {
             Uri u = Uri.parse(url);
             String host = u.getHost() == null ? "" : u.getHost();
-            if (host.equals("settings")) chooseVersion(false);
+            if (host.equals("settings")) showMenu();
             else if (host.equals("print-lines")) printLines(u.getQueryParameter("data"), u.getQueryParameter("paper"));
             else if (host.equals("test-print")) testPrint();
             return true;
@@ -211,31 +260,18 @@ public class MainActivity extends Activity {
         return a;
     }
 
-    private void chooseVersion(final boolean firstRun) {
-        final String base = baseUrl();
-        String[] items = {
-                "Bản đầy đủ (khuyên dùng)",
-                "Bản Lite (máy cũ, mạng yếu)",
-                "Đổi địa chỉ trang web…",
-                "In thử máy in tích hợp",
-                "Tải lại trang"
-        };
+    private void showMenu() {
+        String[] items = {"Tải lại trang", "In thử máy in tích hợp", "Đổi địa chỉ trang web…"};
         new AlertDialog.Builder(this)
-                .setTitle("Lam An POS · " + BuildConfig.VERSION_NAME)
-                .setCancelable(!firstRun)
+                .setTitle("Lam An POS")
+                .setMessage(deviceLine())
                 .setItems(items, (d, which) -> {
-                    if (which == 0) open(base + "/");
-                    else if (which == 1) open(base + "/lite");
-                    else if (which == 2) askBaseUrl();
-                    else if (which == 3) testPrint();
-                    else web.reload();
+                    if (which == 0) web.loadUrl(startUrl());
+                    else if (which == 1) testPrint();
+                    else askBaseUrl();
                 })
+                .setNegativeButton("Đóng", null)
                 .show();
-    }
-
-    private void open(String url) {
-        prefs.edit().putString("url", url).apply();
-        web.loadUrl(url);
     }
 
     private void askBaseUrl() {
@@ -251,8 +287,8 @@ public class MainActivity extends Activity {
                         toast("Địa chỉ phải bắt đầu bằng https://");
                         return;
                     }
-                    prefs.edit().putString("base", v).remove("url").apply();
-                    chooseVersion(true);
+                    prefs.edit().putString("base", v).apply();
+                    web.loadUrl(startUrl());
                 })
                 .setNegativeButton("Hủy", null)
                 .show();
@@ -300,7 +336,7 @@ public class MainActivity extends Activity {
             return true;
         }
         if (keyCode == KeyEvent.KEYCODE_MENU) {
-            chooseVersion(false);
+            showMenu();
             return true;
         }
         return super.onKeyDown(keyCode, event);
@@ -309,7 +345,7 @@ public class MainActivity extends Activity {
     @Override
     public boolean onKeyLongPress(int keyCode, KeyEvent event) {
         if (keyCode == KeyEvent.KEYCODE_BACK) {
-            chooseVersion(false);
+            showMenu();
             return true;
         }
         return super.onKeyLongPress(keyCode, event);

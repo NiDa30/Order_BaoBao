@@ -24,6 +24,7 @@ import java.util.concurrent.TimeUnit;
 public class PrinterBridge {
     private final Context context;
     private volatile SunmiPrinterService service;
+    private volatile int webViewVersion;
     private final InnerPrinterCallback callback = new InnerPrinterCallback() {
         @Override
         protected void onConnected(SunmiPrinterService s) {
@@ -38,6 +39,10 @@ public class PrinterBridge {
 
     public PrinterBridge(Context context) {
         this.context = context.getApplicationContext();
+    }
+
+    void setWebViewVersion(int v) {
+        webViewVersion = v;
     }
 
     public void connect() {
@@ -103,6 +108,7 @@ public class PrinterBridge {
             o.put("model", Build.MODEL);
             o.put("manufacturer", Build.MANUFACTURER);
             o.put("android", Build.VERSION.RELEASE);
+            o.put("webview", webViewVersion);
             SunmiPrinterService s = waitService();
             o.put("printer", s != null ? "sunmi" : "none");
             if (s != null) {

@@ -51,28 +51,93 @@ jobs:
       - name: Verify APK
         run: |
           BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
-          INFO=$("$BT/aapt2" dump badging LamAnPOS.apk | grep -E "^(package|sdkVersion|targetSdkVersion|application-label):" | tr '\n' ' ')
+          INFO=$("$BT/aapt2" dump badging LamAnPOS.apk | grep -E "^(package|targetSdkVersion|application-label):" | tr '\n' ' ')
           # Android 5–6 (e.g. SUNMI T1) only accept v1 (JAR) signatures: fail the build if it is missing.
           VERIFY=$("$BT/apksigner" verify --verbose --min-sdk-version 21 LamAnPOS.apk)
           echo "$VERIFY" | grep -q "Verified using v1 scheme (JAR signing): true" || { echo "::error::APK lacks v1 signature for Android 5-6"; echo "$VERIFY"; exit 1; }
           SIGNER="v1+v2 signed, $("$BT/apksigner" verify --print-certs LamAnPOS.apk | grep -m1 "certificate DN" | sed 's/.*certificate DN: //')"
           DEX=$(unzip -p LamAnPOS.apk 'classes*.dex' | strings -n 8)
-          for s in vn/laman/pos/PrinterBridge com/sunmi/peripheral/printer/InnerPrinterManager woyou.aidlservice.jiuiv5 LamAnAndroid; do
+          for s in vn/laman/pos/PrinterBridge vn/laman/pos/TlsCompat com/sunmi/peripheral/printer/InnerPrinterManager woyou.aidlservice.jiuiv5 LamAnAndroid; do
             echo "$DEX" | grep -q "$s" || { echo "::error::missing $s"; exit 1; }
           done
+          unzip -l LamAnPOS.apk | grep -q "res/.*isrg_root_x1" || unzip -l LamAnPOS.apk | grep -q "isrg" || { echo "::error::bundled ISRG roots missing"; exit 1; }
           echo "::notice title=APK::$INFO | $(stat -c %s LamAnPOS.apk) bytes | $SIGNER"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: LamAnPOS-${{ github.run_number }}
+          name: LamAnPOS
           path: LamAnPOS.apk
 
+  device-test:
+    # Same Android version as the SUNMI T1 (Android 6 / API 23): HTTPS to Vercel, web app, printer bridge, receipt renderer.
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Build test APKs
+        run: gradle -p android assembleDebug assembleDebugAndroidTest --no-daemon
+
+      - name: Android 6 emulator tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 23
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: |
+            adb logcat -c || true
+            gradle -p android connectedDebugAndroidTest --no-daemon || touch tests-failed
+            adb logcat -d -s LamAnTest:I > lamantest.txt || true
+            test ! -f tests-failed
+
+      - name: Report device tests
+        if: always()
+        run: |
+          [ -f lamantest.txt ] && grep "LamAnTest" lamantest.txt | sed -E 's/^.*LamAnTest[^:]*: //' | cut -c1-900 | while read -r line; do echo "::notice title=device::$line"; done || true
+          python3 - <<'PY'
+          import glob, xml.etree.ElementTree as ET
+          for f in glob.glob('android/app/build/outputs/androidTest-results/connected/**/*.xml', recursive=True):
+              for tc in ET.parse(f).getroot().iter('testcase'):
+                  fail = tc.find('failure')
+                  name = tc.get('name')
+                  if fail is not None:
+                      msg = (fail.get('message') or fail.text or '').strip().replace('\n', ' ')[:900]
+                      print(f"::error title={name}::{msg}")
+                  else:
+                      print(f"::notice title=test passed::{name}")
+          PY
+
+  release:
+    needs: [build, device-test]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: LamAnPOS
+
       - name: Publish release
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "android-${{ github.run_number }}" LamAnPOS.apk \
+          gh release create "android-${{ github.run_number }}" LamAnPOS.apk --repo "${{ github.repository }}" \
             --title "Lam An POS Android 1.0.${{ github.run_number }}" \
-            --notes "Ứng dụng Android cho máy POS (SUNMI…): mở trang web của quán và in bill bằng máy in tích hợp. Cài file LamAnPOS.apk." \
+            --notes "Ứng dụng Android cho máy POS (SUNMI…): mở bản đầy đủ của quán và in bill bằng máy in tích hợp. Đã kiểm thử tự động trên Android 6. Cài file LamAnPOS.apk." \
             --latest
