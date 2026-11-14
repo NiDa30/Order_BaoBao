@@ -6,6 +6,9 @@ import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
+import android.net.ConnectivityManager;
+import android.net.NetworkInfo;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -29,6 +32,12 @@ import org.mozilla.geckoview.WebRequestError;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.Proxy;
+import java.net.ProxySelector;
+import java.net.Socket;
+import java.net.URI;
+import java.util.List;
 import java.net.URL;
 import java.util.Scanner;
 import java.util.concurrent.ExecutorService;
@@ -95,7 +104,7 @@ public class MainActivity extends Activity {
                 final String host = Uri.parse(uri == null ? startUrl() : uri).getHost();
                 final String code = "Mã lỗi " + error.code + " / " + error.category + " · " + errorText(error.code);
                 worker.execute(() -> {
-                    String diag = diagnose(host == null ? Uri.parse(baseUrl()).getHost() : host);
+                    String diag = networkInfo(MainActivity.this) + "\n" + diagnose(host == null ? Uri.parse(baseUrl()).getHost() : host);
                     final String html = problemPage("Không kết nối được", "Kiểm tra Wi-Fi hoặc mạng rồi bấm Thử lại.", code + "\n" + diag, startUrl());
                     runOnUiThread(() -> page.complete(html));
                 });
@@ -183,6 +192,35 @@ public class MainActivity extends Activity {
         }
     }
 
+    private static String why(Throwable e) {
+        String m = e.getMessage();
+        if (m == null && e.getCause() != null) m = e.getCause().getMessage();
+        m = m == null ? "" : m;
+        return e.getClass().getSimpleName() + (m.isEmpty() ? "" : ": " + (m.length() > 90 ? m.substring(0, 90) + "…" : m));
+    }
+
+    /** Permission, active network and proxy as seen by Android (error page diagnosis). */
+    static String networkInfo(Context ctx) {
+        StringBuilder sb = new StringBuilder();
+        boolean internet = ctx.checkCallingOrSelfPermission(android.Manifest.permission.INTERNET) == PackageManager.PERMISSION_GRANTED;
+        sb.append("Quyền Internet của ứng dụng: ").append(internet ? "có" : "BỊ TẮT");
+        try {
+            ConnectivityManager cm = (ConnectivityManager) ctx.getSystemService(Context.CONNECTIVITY_SERVICE);
+            NetworkInfo ni = cm == null ? null : cm.getActiveNetworkInfo();
+            sb.append("\nMạng đang dùng: ").append(ni == null ? "không có" : ni.getTypeName() + " · " + ni.getDetailedState() + (ni.isConnected() ? "" : " (chưa kết nối)"));
+        } catch (Exception e) {
+            sb.append("\nMạng đang dùng: ? (").append(why(e)).append(")");
+        }
+        try {
+            List<Proxy> proxies = ProxySelector.getDefault().select(new URI("https://orderbaobao.vercel.app/"));
+            Proxy p = proxies.isEmpty() ? Proxy.NO_PROXY : proxies.get(0);
+            sb.append("\nProxy: ").append(p.type() == Proxy.Type.DIRECT ? "không" : p.toString());
+        } catch (Exception e) {
+            sb.append("\nProxy: ? (").append(why(e)).append(")");
+        }
+        return sb.toString();
+    }
+
     /** Device DNS and DNS-over-HTTPS lookups for the error page. Network I/O: worker thread only. */
     static String diagnose(String host) {
         StringBuilder sb = new StringBuilder();
@@ -190,7 +228,16 @@ public class MainActivity extends Activity {
             InetAddress[] a = InetAddress.getAllByName(host);
             sb.append("DNS của máy: ").append(host).append(" → ").append(a[0].getHostAddress());
         } catch (Exception e) {
-            sb.append("DNS của máy: không phân giải được ").append(host);
+            sb.append("DNS của máy: không phân giải được ").append(host).append(" (").append(why(e)).append(")");
+        }
+        Socket sock = new Socket();
+        try {
+            sock.connect(new InetSocketAddress("1.1.1.1", 443), 6000);
+            sb.append("\nKết nối thẳng 1.1.1.1:443: được");
+        } catch (Exception e) {
+            sb.append("\nKết nối thẳng 1.1.1.1:443: lỗi (").append(why(e)).append(")");
+        } finally {
+            try { sock.close(); } catch (Exception ignored) { }
         }
         // Same idea as GeckoView's DNS over HTTPS, checked here with the system TLS stack (two providers,
         // because old Android may not trust every provider's certificate).
@@ -211,7 +258,7 @@ public class MainActivity extends Activity {
                     failures += pr[0] + ": không có kết quả; ";
                 }
             } catch (Exception e) {
-                failures += pr[0] + ": " + e.getClass().getSimpleName() + "; ";
+                failures += pr[0] + ": " + why(e) + "; ";
             } finally {
                 if (c != null) c.disconnect();
             }
