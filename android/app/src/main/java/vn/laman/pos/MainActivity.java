@@ -26,6 +26,11 @@ import org.mozilla.geckoview.GeckoView;
 import org.mozilla.geckoview.WebExtension;
 import org.mozilla.geckoview.WebRequestError;
 
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.InetAddress;
+import java.net.URL;
+import java.util.Scanner;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -39,6 +44,7 @@ import java.util.concurrent.Executors;
 public class MainActivity extends Activity {
     private static final String TAG = "LamAnPOS";
     private static final String PREFS = "lam-an-pos";
+    static final String DOH_URL = "https://1.1.1.1/dns-query";
     private static GeckoRuntime runtime;
     /** Last page state reported by the content script (device tests and diagnostics). */
     static volatile String lastPageState = null;
@@ -63,6 +69,10 @@ public class MainActivity extends Activity {
             runtime = GeckoRuntime.create(getApplicationContext(), new GeckoRuntimeSettings.Builder()
                     .javaScriptEnabled(true)
                     .remoteDebuggingEnabled(false)
+                    // Some shop networks/ISPs fail to resolve *.vercel.app. Resolve names over HTTPS first
+                    // (IP address URL: needs no DNS itself) and fall back to the device DNS if DoH is blocked.
+                    .trustedRecursiveResolverMode(GeckoRuntimeSettings.TRR_MODE_FIRST)
+                    .trustedRecursiveResolverUri(DOH_URL)
                     .build());
         }
         session = new GeckoSession();
@@ -80,8 +90,16 @@ public class MainActivity extends Activity {
 
             @Override
             public GeckoResult<String> onLoadError(GeckoSession s, String uri, WebRequestError error) {
-                return GeckoResult.fromValue(problemPage("Không kết nối được",
-                        "Kiểm tra Wi-Fi hoặc mạng rồi bấm Thử lại.", "Mã lỗi " + error.code + " / " + error.category, startUrl()));
+                // Build the error page with a quick network diagnosis (device DNS, DNS over HTTPS).
+                final GeckoResult<String> page = new GeckoResult<>();
+                final String host = Uri.parse(uri == null ? startUrl() : uri).getHost();
+                final String code = "Mã lỗi " + error.code + " / " + error.category + " · " + errorText(error.code);
+                worker.execute(() -> {
+                    String diag = diagnose(host == null ? Uri.parse(baseUrl()).getHost() : host);
+                    final String html = problemPage("Không kết nối được", "Kiểm tra Wi-Fi hoặc mạng rồi bấm Thử lại.", code + "\n" + diag, startUrl());
+                    runOnUiThread(() -> page.complete(html));
+                });
+                return page;
             }
         });
         session.open(runtime);
@@ -108,6 +126,7 @@ public class MainActivity extends Activity {
                     if (!(message instanceof JSONObject)) return;
                     final JSONObject m = (JSONObject) message;
                     final String sender = p.sender == null ? null : p.sender.url;
+                    if (worker.isShutdown()) return; // activity already closed
                     worker.execute(() -> {
                         String result = answer(m.optString("method"), m.optString("arg"), sender);
                         JSONObject reply = new JSONObject();
@@ -116,7 +135,9 @@ public class MainActivity extends Activity {
                             reply.put("result", result);
                         } catch (Exception ignored) {
                         }
-                        runOnUiThread(() -> p.postMessage(reply));
+                        runOnUiThread(() -> {
+                            if (!isFinishing()) p.postMessage(reply);
+                        });
                     });
                 }
 
@@ -148,6 +169,54 @@ public class MainActivity extends Activity {
             default:
                 return "{\"ok\":false,\"message\":\"Không hỗ trợ\"}";
         }
+    }
+
+    static String errorText(int code) {
+        switch (code) {
+            case WebRequestError.ERROR_UNKNOWN_HOST: return "không tìm được địa chỉ tên miền (DNS)";
+            case WebRequestError.ERROR_NET_TIMEOUT: return "hết thời gian chờ";
+            case WebRequestError.ERROR_CONNECTION_REFUSED: return "máy chủ từ chối kết nối";
+            case WebRequestError.ERROR_NET_RESET: case WebRequestError.ERROR_NET_INTERRUPT: return "kết nối bị ngắt";
+            case WebRequestError.ERROR_OFFLINE: return "thiết bị đang ngoại tuyến";
+            case WebRequestError.ERROR_SECURITY_SSL: case WebRequestError.ERROR_SECURITY_BAD_CERT: return "lỗi chứng chỉ bảo mật (kiểm tra ngày giờ của máy)";
+            default: return "lỗi mạng";
+        }
+    }
+
+    /** Device DNS and DNS-over-HTTPS lookups for the error page. Network I/O: worker thread only. */
+    static String diagnose(String host) {
+        StringBuilder sb = new StringBuilder();
+        try {
+            InetAddress[] a = InetAddress.getAllByName(host);
+            sb.append("DNS của máy: ").append(host).append(" → ").append(a[0].getHostAddress());
+        } catch (Exception e) {
+            sb.append("DNS của máy: không phân giải được ").append(host);
+        }
+        // Same idea as GeckoView's DNS over HTTPS, checked here with the system TLS stack (two providers,
+        // because old Android may not trust every provider's certificate).
+        sb.append("\nDNS qua HTTPS: ");
+        String[][] providers = {{"1.1.1.1", DOH_URL + "?type=A&name="}, {"8.8.8.8", "https://8.8.8.8/resolve?type=A&name="}};
+        String failures = "";
+        for (String[] pr : providers) {
+            HttpURLConnection c = null;
+            try {
+                c = (HttpURLConnection) new URL(pr[1] + host).openConnection();
+                c.setRequestProperty("Accept", "application/dns-json");
+                c.setConnectTimeout(8000);
+                c.setReadTimeout(8000);
+                try (InputStream in = c.getInputStream(); Scanner sc = new Scanner(in, "UTF-8").useDelimiter("\\A")) {
+                    String body = sc.hasNext() ? sc.next() : "";
+                    java.util.regex.Matcher m = java.util.regex.Pattern.compile("\"data\":\"(\\d+\\.\\d+\\.\\d+\\.\\d+)\"").matcher(body);
+                    if (m.find()) return sb.append("được (").append(pr[0]).append(") → ").append(m.group(1)).toString();
+                    failures += pr[0] + ": không có kết quả; ";
+                }
+            } catch (Exception e) {
+                failures += pr[0] + ": " + e.getClass().getSimpleName() + "; ";
+            } finally {
+                if (c != null) c.disconnect();
+            }
+        }
+        return sb.append("bị chặn hoặc lỗi (").append(failures).append(")").toString();
     }
 
     private String baseUrl() {
@@ -289,7 +358,7 @@ public class MainActivity extends Activity {
 
     private String problemPage(String title, String text, String detail, String retry) {
         String html = "<html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width'></head><body style='font-family:sans-serif;padding:24px;color:#21362c'>"
-                + "<h2>" + escape(title) + "</h2><p>" + escape(text) + "</p><p style='color:#777;font-size:13px'>" + escape(detail) + "<br>" + escape(deviceLine()) + "</p>"
+                + "<h2>" + escape(title) + "</h2><p>" + escape(text) + "</p><p style='color:#777;font-size:13px'>" + escape(detail).replace("\n", "<br>") + "<br>" + escape(deviceLine()) + "</p>"
                 + "<p><a href='" + escape(retry) + "' style='font-size:20px;display:inline-block;background:#245344;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none'>Thử lại</a></p>"
                 + "<p><a href='lamanpos://settings'>Cài đặt ứng dụng</a></p></body></html>";
         try {

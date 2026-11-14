@@ -7,6 +7,7 @@ import android.util.Log;
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.core.app.ApplicationProvider;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.test.platform.app.InstrumentationRegistry;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -48,6 +49,20 @@ public class AppTest {
             assertEquals("Lam An · Quầy bán hàng", o.optString("title"));
             assertTrue(o.optString("url").startsWith("https://orderbaobao.vercel.app/"));
             assertEquals("window.LamAnAndroid visible to the page", "function", o.optString("bridge"));
+        }
+    }
+
+    /**
+     * DNS fallback. In CI this also runs on an emulator whose DNS server is unreachable (brokenDns=true):
+     * the device resolver must fail there while DNS over HTTPS (used by GeckoView first) still works.
+     */
+    @Test
+    public void dnsOverHttpsResolvesTheShopSite() {
+        String diag = MainActivity.diagnose("orderbaobao.vercel.app");
+        Log.i(TAG, "dns diagnosis: " + diag.replace("\n", " | "));
+        assertTrue(diag, diag.contains("DNS qua HTTPS: được"));
+        if ("true".equals(InstrumentationRegistry.getArguments().getString("brokenDns"))) {
+            assertTrue("device DNS should be broken in this run: " + diag, diag.contains("DNS của máy: không phân giải được"));
         }
     }
 
