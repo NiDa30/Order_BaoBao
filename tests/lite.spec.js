@@ -1,0 +1,241 @@
+// Lite version (/lite) end-to-end with JavaScript DISABLED, like Opera Mini Extreme mode.
+// Server: scripts/lite-dev.js against tests/helpers/fake-supabase.js (see playwright.config.js).
+import { test, expect } from '@playwright/test';
+
+const LITE = 'http://127.0.0.1:5176/lite', FAKE = 'http://127.0.0.1:5177';
+test.use({ javaScriptEnabled: false });
+const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+let n = 0;
+const domain = () => `s${process.pid}x${Date.now().toString(36)}x${n++}.test`;
+async function login(page, email, password = 'synthetic-password') {
+  await page.goto(LITE);
+  await page.getByLabel('Email').fill(email);
+  await page.getByLabel('Mật khẩu').fill(password);
+  await page.getByRole('button', { name: 'Đăng nhập' }).click();
+}
+const seed = (request, body) => request.post(`${FAKE}/__seed`, { data: body });
+const state = async (request, d) => (await request.get(`${FAKE}/__state?shop=${d}`)).json();
+const nav = (page, name) => page.locator('.nav').getByRole('link', { name, exact: true }).click();
+
+test('admin sells, pays, prints and sees the order in history and revenue without JavaScript', async ({ page, request }) => {
+  const d = domain();
+  await login(page, `admin@${d}`, 'wrong-password');
+  await expect(page.locator('.flash.err')).toContainText('Email hoặc mật khẩu chưa đúng');
+  await login(page, `admin@${d}`);
+  await expect(page.locator('.flash')).toContainText('Đã đăng nhập');
+  await expect(page.locator('.top')).toContainText('Admin');
+  await page.getByRole('link', { name: '＋ Tạo đơn mới' }).click();
+  await page.getByLabel('Bàn / Số order').fill('15');
+  await page.getByLabel('Tên khách hàng').fill('Chị Linh');
+  await page.locator('input[name=q_m1]').fill('2'); // Cà phê sữa 22.000
+  await page.locator('input[name=q_m0]').fill('1'); // Cà phê đá 20.000
+  await page.getByRole('button', { name: 'Lưu đơn hàng' }).click();
+  await expect(page.locator('h1')).toHaveText('Chị Linh');
+  await expect(page.locator('.total')).toHaveText('64.000 ₫');
+  await page.getByLabel(/Chuyển khoản/).check();
+  await page.getByRole('button', { name: '✓ Xác nhận đã thanh toán' }).click();
+  await expect(page.locator('.flash')).toContainText('Đã lưu thanh toán bằng chuyển khoản');
+  await expect(page.locator('.box').nth(1)).toContainText('Chuyển khoản');
+  const s = await state(request, d);
+  expect(s.data.orders[0]).toMatchObject({ status: 'paid', paymentMethod: 'transfer', paymentTotals: { cash: 0, transfer: 64000 }, label: 'Chị Linh', shift: 1, day: today });
+  expect(s.data.menu.length).toBe(51); // default menu saved with the first order
+  await page.getByRole('link', { name: '🖨 In bill' }).click();
+  await expect(page.locator('.receipt')).toContainText('HÓA ĐƠN THANH TOÁN');
+  await expect(page.locator('.receipt')).toContainText('64.000đ');
+  const href = await page.getByRole('link', { name: '🖨 In qua RawBT' }).getAttribute('href');
+  expect(href).toMatch(/^intent:base64,[A-Za-z0-9+/=]+#Intent;scheme=rawbt;package=ru\.a402d\.rawbtprinter;end;$/);
+  const bytes = Buffer.from(href.slice(14, href.indexOf('#')), 'base64');
+  expect([...bytes.subarray(0, 2)]).toEqual([0x1b, 0x40]);
+  expect(bytes.toString('latin1')).toContain('HOA DON THANH TOAN');
+  await nav(page, 'Lịch sử');
+  await page.getByLabel('Tìm khách, số đơn, món').fill('chi linh');
+  await page.getByRole('button', { name: 'Lọc' }).click();
+  await expect(page.locator('.row')).toHaveCount(1);
+  await nav(page, 'Doanh thu');
+  await expect(page.locator('.box').nth(1)).toContainText('64.000 ₫');
+  await expect(page.locator('.box').nth(1)).toContainText('Chuyển khoản: 64.000 ₫');
+});
+
+test('staff only see assigned shift, cannot reach admin pages or cancel paid orders, and propose menu items', async ({ page, request, browser }) => {
+  const d = domain();
+  await seed(request, { email: `admin@${d}`, members: [`staff@${d}`], assign: [{ email: `staff@${d}`, day: today, shift: 2 }], data: { menu: [{ id: 'm1', category: 'Cà phê', name: 'Cà phê sữa', price: 22000 }] } });
+  await login(page, `staff@${d}`);
+  await expect(page.locator('.top')).toContainText('Nhân viên');
+  await expect(page.locator('.nav')).not.toContainText('Nhân viên');
+  await expect(page.getByText('Ca 2', { exact: true })).toBeVisible();
+  await expect(page.locator('a', { hasText: 'Ca 1' })).toHaveCount(0);
+  await page.goto(`${LITE}?p=team`);
+  await expect(page.locator('.flash.err')).toContainText('Chỉ admin');
+  await page.goto(`${LITE}?p=new&s=1`);
+  await expect(page.locator('.flash.err')).toContainText('chưa được phân công');
+  await page.goto(`${LITE}?p=new&s=2`);
+  await page.locator('input[name=q_m1]').fill('1');
+  await page.getByRole('button', { name: 'Lưu đơn hàng' }).click();
+  await page.getByRole('button', { name: '✓ Xác nhận đã thanh toán' }).click();
+  await expect(page.getByRole('link', { name: 'Hủy đơn' })).toHaveCount(0);
+  const id = (await state(request, d)).data.orders[0].id;
+  await page.goto(`${LITE}?p=cancel&id=${id}`);
+  await expect(page.locator('.flash.err')).toContainText('Không có quyền hủy');
+  await nav(page, 'Thực đơn');
+  await page.getByLabel('Tên món').fill('Trà sữa trân châu');
+  await page.getByLabel('Giá bán (VNĐ)').fill('30000');
+  await page.getByLabel('Lý do đề xuất').fill('Khách hỏi nhiều');
+  await page.getByRole('button', { name: 'Gửi đề xuất' }).click();
+  await expect(page.locator('.flash')).toContainText('Đã gửi đề xuất');
+  expect((await state(request, d)).data.menu).toHaveLength(1);
+  const adminPage = await (await browser.newContext({ javaScriptEnabled: false })).newPage();
+  await login(adminPage, `admin@${d}`);
+  await nav(adminPage, 'Thực đơn');
+  await adminPage.getByRole('button', { name: 'Duyệt', exact: true }).click();
+  await expect(adminPage.locator('.flash')).toContainText('Đã duyệt');
+  expect((await state(request, d)).data.menu.map(m => m.name)).toContain('Trà sữa trân châu');
+});
+
+test('editing a paid order needs a reason and settlement; stale forms are rejected', async ({ page, request, browser }) => {
+  const d = domain();
+  await login(page, `admin@${d}`);
+  await page.getByRole('link', { name: '＋ Tạo đơn mới' }).click();
+  await page.locator('input[name=q_m1]').fill('1');
+  await page.getByRole('button', { name: 'Lưu đơn hàng' }).click();
+  await page.getByRole('button', { name: '✓ Xác nhận đã thanh toán' }).click();
+  await page.getByRole('link', { name: '✎ Sửa đơn' }).click();
+  await page.locator('input[name=q_m1]').fill('2');
+  await page.getByRole('button', { name: 'Lưu thay đổi' }).click();
+  await expect(page.locator('.flash.err')).toContainText('lý do sửa đơn');
+  await page.getByLabel('Lý do sửa đơn đã thanh toán').fill('Khách gọi thêm');
+  await page.getByRole('button', { name: 'Lưu thay đổi' }).click();
+  await expect(page.locator('.flash.err')).toContainText('xác nhận đã xử lý tiền chênh lệch');
+  await expect(page.locator('.warn')).toContainText('Cần thu thêm: 22.000 ₫');
+  await page.getByLabel('Đã thu thêm / hoàn lại đủ tiền chênh lệch').check();
+  await page.getByRole('button', { name: 'Lưu thay đổi' }).click();
+  await expect(page.locator('.flash')).toContainText('Đã cập nhật đơn hàng');
+  await expect(page.locator('.total')).toHaveText('44.000 ₫');
+  let o = (await state(request, d)).data.orders[0];
+  expect(o).toMatchObject({ editReason: 'Khách gọi thêm', paymentTotals: { cash: 44000 }, settlement: { kind: 'collect', amount: 22000, method: 'cash' } });
+  expect(o.revisions).toHaveLength(1);
+  // Another device changes the order while this edit form is open.
+  await page.getByRole('link', { name: '✎ Sửa đơn' }).click();
+  const other = await (await browser.newContext({ javaScriptEnabled: false })).newPage();
+  await login(other, `admin@${d}`);
+  await other.goto(`${LITE}?p=edit&id=${o.id}`);
+  await other.getByLabel('Ghi chú').fill('Ít đá');
+  await other.getByLabel('Lý do sửa đơn đã thanh toán').fill('Ghi chú khách');
+  await other.getByRole('button', { name: 'Lưu thay đổi' }).click();
+  await expect(other.locator('.flash')).toContainText('Đã cập nhật');
+  await page.getByLabel('Lý do sửa đơn đã thanh toán').fill('Sửa bàn');
+  await page.getByLabel('Bàn / Số order').fill('9');
+  await page.getByRole('button', { name: 'Lưu thay đổi' }).click();
+  await expect(page.locator('.flash.err')).toContainText('Đơn đã thay đổi trên thiết bị khác');
+  o = (await state(request, d)).data.orders[0];
+  expect(o.note).toBe('Ít đá');
+  expect(o.table).toBe('1');
+});
+
+test('open shift, close only after unpaid orders are settled, cash note, admin adjustment, closed shift refuses orders', async ({ page, request }) => {
+  const d = domain();
+  await login(page, `admin@${d}`);
+  await nav(page, 'Ca');
+  await page.getByRole('link', { name: 'Mở ca 1' }).click();
+  await page.getByLabel('Tiền mặt đầu ca (VNĐ)').fill('200000');
+  await page.getByRole('button', { name: 'Xác nhận mở ca' }).click();
+  await expect(page.locator('.flash')).toContainText('Đã mở ca 1');
+  await expect(page.locator('.box').nth(1)).toContainText('Tiền mặt đầu ca 200.000 ₫');
+  await nav(page, 'Quầy');
+  await page.getByRole('link', { name: '＋ Tạo đơn mới' }).click();
+  await page.locator('input[name=q_m1]').fill('1');
+  await page.getByRole('button', { name: 'Lưu đơn hàng' }).click();
+  await nav(page, 'Ca');
+  await page.getByRole('link', { name: 'Kết ca 1' }).click();
+  await expect(page.locator('.warn')).toContainText('Còn 1 đơn chưa thanh toán');
+  await page.getByRole('link', { name: 'Xem đơn chưa thanh toán' }).click();
+  await page.locator('.row a').first().click();
+  await page.getByRole('button', { name: '✓ Xác nhận đã thanh toán' }).click();
+  await page.goto(`${LITE}?p=shift-close&s=1`);
+  await page.getByLabel('Tiền mặt thực đếm (VNĐ)').fill('20000');
+  await page.getByRole('button', { name: 'Xác nhận kết ca' }).click();
+  await expect(page.locator('.flash.err')).toContainText('ghi chú cho chênh lệch');
+  await expect(page.getByLabel('Tiền mặt thực đếm (VNĐ)')).toHaveValue('20000'); // kept after the error
+  await page.getByLabel(/Ghi chú đối chiếu/).fill('Thiếu 2.000 tiền lẻ');
+  await page.getByRole('button', { name: 'Xác nhận kết ca' }).click();
+  await expect(page.locator('.flash')).toContainText('Đã kết ca 1');
+  const c = (await state(request, d)).data.closings[0];
+  expect(c).toMatchObject({ shift: 1, revenue: 22000, actualCash: 20000, expectedCash: 22000, discrepancy: -2000, initialCash: 200000 });
+  await page.getByRole('link', { name: 'Điều chỉnh ca' }).first().click();
+  await page.getByLabel(/Số tiền điều chỉnh/).fill('-2000');
+  await page.getByLabel('Lý do').fill('Bù tiền lẻ');
+  await page.getByRole('button', { name: 'Lưu điều chỉnh' }).click();
+  await expect(page.locator('.flash')).toContainText('Đã lưu điều chỉnh');
+  expect((await state(request, d)).data.closings[0]).toMatchObject({ revenue: 20000, originalRevenue: 22000 });
+  await page.goto(`${LITE}?p=new&s=1`);
+  await expect(page.locator('.flash.err')).toContainText('Ca này đã kết thúc');
+});
+
+test('cancel an open order with a reason; admin manages team, audit and exports; CSRF and expired sessions', async ({ page, request }) => {
+  const d = domain();
+  await login(page, `admin-expire@${d}`); // token already expired → refreshed on next request
+  await expect(page.locator('.top')).toContainText('Admin');
+  await page.getByRole('link', { name: '＋ Tạo đơn mới' }).click();
+  await page.locator('input[name=q_m1]').fill('1');
+  await page.getByRole('button', { name: 'Lưu đơn hàng' }).click();
+  await page.getByRole('link', { name: 'Hủy đơn' }).click();
+  await page.getByLabel('Lý do hủy').fill('ab');
+  await page.getByRole('button', { name: 'Xác nhận hủy đơn' }).click();
+  await expect(page.locator('.flash.err')).toContainText('Cần lý do hủy');
+  await page.getByLabel('Lý do hủy').fill('Khách đổi ý');
+  await page.getByRole('button', { name: 'Xác nhận hủy đơn' }).click();
+  await expect(page.locator('.flash')).toContainText('Đã hủy đơn');
+  await expect(page.locator('.warn')).toContainText('Khách đổi ý');
+  await nav(page, 'Nhân viên');
+  await page.getByLabel('Họ tên').fill('Nhân viên Mới');
+  await page.getByLabel('Email', { exact: true }).fill(`staff-new@${d}`);
+  await page.getByLabel('Hình thức').selectOption('new');
+  await page.getByLabel(/Mật khẩu tạm/).fill('temporary-pass');
+  await page.getByRole('button', { name: 'Thêm tài khoản' }).click();
+  await expect(page.locator('.flash')).toContainText('Đã thêm tài khoản');
+  await page.locator('.row', { hasText: 'Nhân viên Mới' }).getByRole('button', { name: 'Cấp quyền admin' }).click();
+  await expect(page.locator('.row', { hasText: 'Nhân viên Mới' })).toContainText('Admin · Hoạt động');
+  await page.locator('form', { hasText: 'Phân ca theo ngày' }).getByLabel('Nhân viên').selectOption({ label: 'Nhân viên Mới · Admin' });
+  await page.locator('form', { hasText: 'Phân ca theo ngày' }).getByLabel('Ca').selectOption('3');
+  await page.getByRole('button', { name: 'Phân ca' }).click();
+  await expect(page.locator('.row', { hasText: 'Ca 3' })).toContainText('Nhân viên Mới');
+  await nav(page, 'Nhật ký');
+  await expect(page.locator('.wrap')).toContainText('Thêm tài khoản');
+  await expect(page.locator('.wrap')).toContainText('Phân ca');
+  const res = await page.request.get(`${LITE}?p=download&type=orders`);
+  expect(res.headers()['content-disposition']).toMatch(/attachment; filename=".+\.csv"/);
+  expect(await res.text()).toContain('Khách đổi ý');
+  const forged = await page.request.post(LITE, { form: { a: 'order-pay', id: 'x', method: 'cash', t: 'not-the-token' }, maxRedirects: 0 });
+  expect(forged.status()).toBe(303);
+  await page.goto(LITE);
+  await expect(page.locator('.flash.err')).toContainText('Phiên làm việc đã hết hạn');
+});
+
+test('blocked accounts see no data; account page changes password and bill paper size', async ({ page, request }) => {
+  const d = domain();
+  await login(page, `blocked@${d}`);
+  await expect(page.locator('h1')).toHaveText('Tài khoản chưa được cấp quyền');
+  await page.getByRole('button', { name: 'Đăng xuất' }).click();
+  await login(page, `admin@${d}`);
+  await page.getByRole('link', { name: '＋ Tạo đơn mới' }).click();
+  await page.locator('input[name=q_m1]').fill('1');
+  await page.getByRole('button', { name: 'Lưu đơn hàng' }).click();
+  const id = (await state(request, d)).data.orders[0].id;
+  await nav(page, 'Tài khoản');
+  await page.getByLabel('Khổ giấy').selectOption('80');
+  await page.getByLabel('Địa chỉ').fill('12 Lê Lợi, Huế');
+  await page.getByRole('button', { name: 'Lưu cài đặt in' }).click();
+  await page.goto(`${LITE}?p=bill&id=${id}`);
+  const lines = (await page.locator('.receipt').innerText()).split('\n');
+  expect(lines.some(l => l === '-'.repeat(48))).toBe(true);
+  expect(lines.join('\n')).toContain('PHIẾU TẠM TÍNH');
+  expect(lines.join('\n')).toContain('12 Lê Lợi, Huế');
+  await nav(page, 'Tài khoản');
+  await page.getByLabel(/Mật khẩu mới/).fill('new-password-123');
+  await page.getByRole('button', { name: 'Lưu mật khẩu' }).click();
+  await expect(page.locator('.flash')).toContainText('Đã đổi mật khẩu');
+  await page.getByRole('button', { name: 'Đăng xuất' }).click();
+  await login(page, `admin@${d}`, 'synthetic-password');
+  await expect(page.locator('.flash.err')).toContainText('Email hoặc mật khẩu chưa đúng');
+  await login(page, `admin@${d}`, 'new-password-123');
+  await expect(page.locator('.top')).toContainText('Admin');
+});

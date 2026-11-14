@@ -104,9 +104,24 @@ npm test
 npm run test:db
 ```
 
-Playwright chạy trên desktop 1440px và điện thoại 390px, dùng API/auth giả lập và không ghi dữ liệu vào dự án thật. Kiểm tra POS, in bill/nhận diện máy in (RawBT, WebUSB giả lập, hộp thoại in), đăng nhập/đăng xuất, offline/retry, conflict, admin/nhân viên, lý do sửa/thu hoàn tiền, hủy, phân ca, đề xuất menu, đối chiếu tiền, báo cáo và Edge Function auth guards. Server test port 5175 tách dev 5173. Cấu hình dùng Chromium hệ thống hoặc `CHROMIUM_PATH`, nếu không có dùng browser Playwright đã cài.
+Playwright chạy trên desktop 1440px và điện thoại 390px, dùng API/auth giả lập và không ghi dữ liệu vào dự án thật. Kiểm tra POS, bản Lite không JavaScript, in bill/nhận diện máy in (RawBT, WebUSB giả lập, hộp thoại in), đăng nhập/đăng xuất, offline/retry, conflict, admin/nhân viên, lý do sửa/thu hoàn tiền, hủy, phân ca, đề xuất menu, đối chiếu tiền, báo cáo và Edge Function auth guards. Server test port 5175 tách dev 5173. Cấu hình dùng Chromium hệ thống hoặc `CHROMIUM_PATH`, nếu không có dùng browser Playwright đã cài.
 
 `test:db` dùng Docker/PostgreSQL 17 tạm, không mở cổng host, chạy migrations hai lần và kiểm tra CAS, tổng tiền, role escalation, lọc ca từ DB, chống giả mạo tài khoản thao tác, khóa tài khoản, paid edit, refund/cancel, đề xuất/duyệt menu, đối chiếu và điều chỉnh ca. Không thay thế kiểm tra trên Supabase thật sau khi áp dụng migration và deploy function.
+
+## Bản Lite cho Opera Mini và trình duyệt nhẹ (`/lite`)
+
+Mở `https://<tên-miền>/lite`. Đây là bản dựng sẵn từng trang HTML trên máy chủ (Vercel Function `api/lite.js`), **không cần JavaScript trên trình duyệt**, nên chạy được trên Opera Mini ở chế độ tiết kiệm dữ liệu Extreme, trình duyệt cũ và máy yếu. Mỗi thao tác là một form gửi lên máy chủ rồi tải lại trang.
+
+- **Dùng chung tài khoản và dữ liệu** với bản đầy đủ. Máy chủ gọi đúng các RPC `pos_read_workspace`, `pos_save_workspace`, `pos_manage`, `pos_list_audit` và Edge Function `pos-create-member` bằng JWT của người dùng, nên database vẫn kiểm tra quyền và nghiệp vụ như bản đầy đủ. Không dùng service role, không cần migration.
+- **Chức năng**: đăng nhập/đăng xuất, đổi mật khẩu; quầy bán hàng theo ca; tạo đơn (nhập số lượng từng món), sửa đơn (cả đơn đã thu: lý do + xác nhận thu thêm/hoàn chênh lệch), thanh toán tiền mặt/chuyển khoản, hủy đơn; in bill; lịch sử đơn; thực đơn (admin sửa trực tiếp, nhân viên gửi đề xuất, admin duyệt); mở/kết ca, chỉnh giờ mở, điều chỉnh ca, phân công; doanh thu ngày/tuần/tháng; nhân viên và phân ca; nhật ký; xuất CSV/JSON.
+- **Ghi dữ liệu**: mỗi thao tác đọc bản mới nhất trên database, áp dụng thay đổi giống `src/main.js`, rồi lưu với kiểm tra revision. Nếu thiết bị khác vừa ghi, máy chủ đọc lại và thử lại tối đa 3 lần. Form sửa đơn mang dấu phiên bản: đơn đã bị sửa ở nơi khác thì báo *Đơn đã thay đổi trên thiết bị khác*, không ghi đè.
+- **Phiên đăng nhập**: token Supabase lưu trong cookie `HttpOnly; SameSite=Lax` (thêm `Secure` trên HTTPS), tự làm mới khi hết hạn. Mọi form có token chống CSRF. Trang không cho nhúng iframe (`X-Frame-Options`, CSP).
+- **In bill**: trang bill hiện bản xem trước và nút *In qua RawBT*. Bản Lite gửi ESC/POS chữ **không dấu** vì không có JavaScript để vẽ ảnh; muốn in có dấu, dùng bản đầy đủ trên Chrome. Khổ giấy, số liên và thông tin quán lưu trong cookie của máy (trang *Tài khoản*).
+- **Hạn chế**: cần mạng liên tục (không bán offline); không có WebUSB/Bluetooth; không có cảnh báo xung đột kiểu bản đầy đủ vì không lưu nháp trên máy.
+- **Biến môi trường**: dùng lại `VITE_SUPABASE_URL` và `VITE_SUPABASE_PUBLISHABLE_KEY` (hoặc `VITE_SUPABASE_ANON_KEY`) đã đặt trên Vercel. Đường dẫn `/lite` được trỏ tới function trong `vercel.json`.
+- **Chạy trên máy**: `npm run lite` rồi mở `http://127.0.0.1:5176/lite` (đọc biến từ `.env.local`). Test: `tests/lite.spec.js` chạy Playwright **tắt JavaScript** với Supabase giả lập (`tests/helpers/fake-supabase.js`).
+
+Mã nguồn: `src/lite/app.js` (định tuyến, phiên, lưu dữ liệu), `src/lite/actions.js` (thao tác nghiệp vụ, giống `main.js`), `src/lite/views.js` (HTML), `src/lite/supabase.js` (gọi Supabase qua `fetch`). Thực đơn mặc định dùng chung: `src/seed-menu.js`.
 
 ## In bill và máy in
 

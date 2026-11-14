@@ -4,14 +4,7 @@ import {managementPages,proposalPanel} from './management-ui.js';
 import {same} from './sync-state.js';
 import {createCloudStore,LOCAL_KEY} from './cloud-store.js';
 import {createPrinting} from './printing-ui.js';
-const seed = [
- ['Cà phê','Cà phê đá',20000],['Cà phê','Cà phê sữa',22000],['Cà phê','Bạc xỉu',25000],['Cà phê','Sâm dứa sữa',25000],['Cà phê','Cà phê muối',29000],['Cà phê','Cà phê cốt dừa',29000],['Cà phê','Cà phê lá dứa',29000],['Cà phê','Cacao đá',29000],
- ['Trà','Trà Lipton chanh',25000],['Trà','Trà gừng',25000],['Trà','Trà đào cam sả',32000],['Trà','Trà vải hoa hồng',32000],['Trà','Trà dâu Nam Mỹ',32000],['Trà','Trà sen vàng',35000],['Trà','Trà xoài macchiato',35000],['Trà','Trà lài kem cheese',35000],['Trà','Trà sữa Olong',35000],['Trà','Trà sữa lá dứa',35000],['Trà','Lục trà mật ong',35000],['Trà','Trà đường',15000],
- ['Nước ép','Ép cam',28000],['Nước ép','Ép dưa hấu',28000],['Nước ép','Ép thơm',28000],['Nước ép','Ép chanh dây',28000],['Nước ép','Ép chanh tươi',28000],['Nước ép','Tắc xí muội',28000],['Nước ép','Ép cam - carrot',33000],['Nước ép','Ép táo thơm',33000],
- ['Sinh tố','Sinh tố việt quất',35000],['Sinh tố','Sinh tố phúc bồn tử',35000],['Sinh tố','Sinh tố dâu',35000],['Sinh tố','Sinh tố sữa dừa',35000],['Sinh tố','Sinh tố theo mùa',35000],
- ['Đá xay & Yaourt','Yaourt đá',29000],['Đá xay & Yaourt','Yaourt lá dứa',32000],['Đá xay & Yaourt','Yaourt đào',32000],['Đá xay & Yaourt','Yaourt chanh dây',32000],['Đá xay & Yaourt','Yaourt việt quất',32000],['Đá xay & Yaourt','Matcha đá xay',39000],['Đá xay & Yaourt','Mocha đá xay',39000],['Đá xay & Yaourt','Chocolate đá xay',39000],['Đá xay & Yaourt','Cookie đá xay',39000],['Đá xay & Yaourt','Dừa sáp',39000],['Đá xay & Yaourt','Dừa lạnh',25000],
- ['Soda & Khác','Soda blue',35000],['Soda & Khác','Soda chanh',29000],['Soda & Khác','Soda việt quất',35000],['Soda & Khác','Soda chanh dây',35000],['Soda & Khác','Coca / 7Up / Sting / Olong',22000],['Soda & Khác','Bò húc',25000],['Soda & Khác','Nước suối',15000]
-].map(([category,name,price],i)=>({id:`m${i}`,category,name,price}));
+import {seed} from './seed-menu.js';
 const KEY=LOCAL_KEY;
 const store=createCloudStore(seed,{
  onData:value=>{db=value;if(!modal||modal==='cloud')render();},
