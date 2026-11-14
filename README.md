@@ -104,9 +104,28 @@ npm test
 npm run test:db
 ```
 
-Playwright chạy trên desktop 1440px và điện thoại 390px, dùng API/auth giả lập và không ghi dữ liệu vào dự án thật. Kiểm tra POS, đăng nhập/đăng xuất, offline/retry, conflict, admin/nhân viên, lý do sửa/thu hoàn tiền, hủy, phân ca, đề xuất menu, đối chiếu tiền, báo cáo và Edge Function auth guards. Server test port 5175 tách dev 5173. Cấu hình dùng Chromium hệ thống hoặc `CHROMIUM_PATH`, nếu không có dùng browser Playwright đã cài.
+Playwright chạy trên desktop 1440px và điện thoại 390px, dùng API/auth giả lập và không ghi dữ liệu vào dự án thật. Kiểm tra POS, in bill/nhận diện máy in (RawBT, WebUSB giả lập, hộp thoại in), đăng nhập/đăng xuất, offline/retry, conflict, admin/nhân viên, lý do sửa/thu hoàn tiền, hủy, phân ca, đề xuất menu, đối chiếu tiền, báo cáo và Edge Function auth guards. Server test port 5175 tách dev 5173. Cấu hình dùng Chromium hệ thống hoặc `CHROMIUM_PATH`, nếu không có dùng browser Playwright đã cài.
 
 `test:db` dùng Docker/PostgreSQL 17 tạm, không mở cổng host, chạy migrations hai lần và kiểm tra CAS, tổng tiền, role escalation, lọc ca từ DB, chống giả mạo tài khoản thao tác, khóa tài khoản, paid edit, refund/cancel, đề xuất/duyệt menu, đối chiếu và điều chỉnh ca. Không thay thế kiểm tra trên Supabase thật sau khi áp dụng migration và deploy function.
+
+## In bill và máy in
+
+Nút **🖨︎ Máy in** trên thanh trên cùng mở phần cài đặt máy in. Cài đặt lưu riêng trên từng thiết bị (localStorage `lam-an-printer-v1`), không đồng bộ lên Supabase, vì mỗi máy POS có máy in riêng. Không cần migration.
+
+- **In bill**: trong chi tiết đơn có nút *In bill cho khách* (đơn đã thanh toán) hoặc *In phiếu tạm tính* (đơn đang phục vụ). Đơn đã hủy không in. Bật *Tự in bill ngay sau khi xác nhận thanh toán* để tự in sau khi bấm thanh toán. Có thể in 1–3 liên mỗi lần.
+- **Nội dung bill**: tên quán, địa chỉ, số điện thoại, lời chào (sửa trong hộp thoại máy in), số HĐ, bàn/khách, giờ, ca, thu ngân, từng món, tổng tiền, hình thức thanh toán và ghi chú.
+- **Khổ giấy**: 58mm (32 ký tự, 384 điểm) hoặc 80mm (48 ký tự, 576 điểm). Mặc định tự chọn theo loại máy POS.
+- **Tự nhận diện**: trang web không tự liệt kê được máy in của thiết bị. Ứng dụng dựa vào model máy (User-Agent Client Hints/User-Agent) để nhận các máy POS Android có máy in tích hợp như SUNMI, iMin, PAX, Telpo, Senraise, Landi, Newland và Urovo. Ứng dụng cũng kiểm tra trình duyệt có hỗ trợ WebUSB/Web Serial không, và đã từng được cấp quyền dùng máy in nào chưa (`navigator.usb.getDevices`, `navigator.serial.getPorts`). Từ đó gợi ý cách in, khổ giấy và hướng dẫn. Danh sách model chỉ để gợi ý, người dùng luôn chọn lại được.
+- **Cách in** (chế độ *Tự động* chọn theo thứ tự sau):
+  1. **USB trực tiếp (WebUSB)**: dùng khi đã kết nối máy in USB (class 7), gửi lệnh ESC/POS thẳng tới máy in và biết chắc máy in đã nhận dữ liệu.
+  2. **Bluetooth/Serial (Web Serial)**: máy in Bluetooth SPP (ví dụ máy in ảo *InnerPrinter* của SUNMI) hoặc USB-serial. Trên Android cần Chrome 138 trở lên; tính năng này còn mới, hãy in thử trước.
+  3. **RawBT** (mặc định trên Android): gửi ESC/POS sang ứng dụng [RawBT](https://play.google.com/store/apps/details?id=ru.a402d.rawbtprinter) qua `intent:base64,…#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;`. Trong RawBT chọn máy in tích hợp (InnerPrinter/USB) và khổ giấy một lần. Web không biết được giấy có ra hay không.
+  4. **Hộp thoại in của hệ thống**: `window.print()` chỉ in phần bill, khổ trang đúng 58/80mm. Dùng với dịch vụ in của hãng hoặc máy in cài trên máy tính.
+- **Chế độ in**: *Ảnh* (mặc định) vẽ bill thành bitmap 1-bit và gửi lệnh `GS v 0`, giữ đủ dấu tiếng Việt trên mọi máy in nhiệt ESC/POS. *Chữ không dấu* gửi text ASCII, nhanh hơn, dùng cho máy in không in được ảnh. Xem trước và hộp thoại in dùng chính bitmap gửi tới máy in.
+- **In thử**: trang in thử có thông tin thiết bị, vạch `|<` `>|` ở hai mép và thước đo để kiểm tra khổ giấy, mẫu chữ tiếng Việt, chữ đậm/cao/lớn, căn lề, dòng món và tổng tiền. Sau khi in, chọn kết quả (*In đẹp*, *Chữ lỗi*, *Mất chữ ở mép*, *Không ra giấy*). Ứng dụng đưa hướng dẫn và nút sửa nhanh: đổi chế độ chữ, đổi khổ giấy hoặc chuyển sang RawBT. Lần in thử gần nhất được lưu lại.
+- WebUSB/Web Serial chỉ chạy trên HTTPS (Vercel) hoặc localhost, và việc chọn thiết bị phải bắt đầu từ thao tác bấm của người dùng. Một số máy POS không cho trình duyệt truy cập máy in tích hợp qua USB; khi đó dùng RawBT.
+
+Mã nguồn: `src/receipt.js` (bố cục bill), `src/escpos.js` (lệnh ESC/POS), `src/printer.js` (nhận diện, các cách in), `src/printing-ui.js` (hộp thoại, in bill, in thử). Test: `tests/printing.spec.js`.
 
 ## QR chuyển khoản
 

@@ -59,3 +59,40 @@ button.sidebar-bottom{background:#fffefa;text-align:left;width:100%;color:inheri
 .badge.muted-badge{background:#e8ece3;color:#78867a}
 .badge.active-shift{background:#def0e3;color:#2c7446}
 .shift-card .shift-assigned{font-size:10px;color:#748471;margin-top:4px;display:flex;align-items:center;gap:6px}
+
+/* Máy in bill */
+.printer-indicator{cursor:pointer}
+.print-bill-button{margin-top:10px}
+.printer-dialog{width:480px}
+.printer-dialog h3{font-size:13px;margin:22px 0 10px}
+.printer-scan{display:flex;gap:10px;align-items:center;font-size:11px;color:#758467;padding:12px 0}
+.printer-scan span{width:14px;height:14px;border-radius:50%;border:2px solid #cfd8c7;border-top-color:var(--green);animation:printer-spin .8s linear infinite}
+@keyframes printer-spin{to{transform:rotate(360deg)}}
+.printer-facts{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.printer-facts>div{background:#f4f6ef;border-radius:8px;padding:9px 11px;font-size:11px;min-width:0}
+.printer-facts span{display:block;font-size:9px;color:#8a9585;margin-bottom:4px}
+.printer-facts b{font-weight:600;overflow-wrap:anywhere}
+.printer-facts .ok{color:#2c7446}.printer-facts .no{color:#a68542}
+.printer-actions{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
+.printer-actions .secondary{text-decoration:none;display:inline-flex;align-items:center}
+.printer-form label{margin:12px 0}
+.printer-form input:not([type=checkbox]),.printer-form select{width:100%;margin-top:6px}
+.printer-test-result{margin-top:14px;padding:14px;border-radius:9px;background:#f1f4e9}
+.printer-test-result.failed{background:#fcf0dc}
+.printer-test-result h3{margin:0 0 6px}
+.printer-test-result p{font-size:11px;line-height:1.7;margin:6px 0}
+.printer-verdicts{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.printer-verdicts .secondary{font-size:11px;padding:10px 8px}
+.printer-preview{margin-top:16px;font-size:11px}
+.printer-preview summary{cursor:pointer;color:#758467}
+.printer-preview .receipt-img{display:block;margin:12px auto 0;width:auto!important;max-width:100%;height:auto;background:#fff;padding:10px;box-shadow:0 2px 14px #11251c22}
+#print-root{display:none}
+@media (max-width:560px){.printer-dialog{width:100%}.printer-facts{grid-template-columns:1fr}.printer-indicator span{display:none}}
+@media print{
+ body.printing-receipt>*:not(#print-root){display:none!important}
+ html:has(body.printing-receipt),body.printing-receipt{background:#fff}
+ body.printing-receipt #print-root{display:block}
+ #print-root .receipt-page{break-after:page;padding:2mm 0}
+ #print-root .receipt-page:last-child{break-after:auto}
+ #print-root .receipt-img{display:block;margin:0 auto;height:auto}
+}
