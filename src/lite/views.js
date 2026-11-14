@@ -283,6 +283,6 @@ ${form(ctx, 'print-settings', `<h2>Cài đặt in bill (trên máy này)</h2><la
 <label>Tên quán trên bill<input type="text" name="name" maxlength="60" value="${esc(print.shop.name)}"></label><label>Địa chỉ<input type="text" name="address" maxlength="120" value="${esc(print.shop.address)}"></label>
 <label>Số điện thoại<input type="text" name="phone" maxlength="20" value="${esc(print.shop.phone)}"></label><label>Lời chào cuối bill<input type="text" name="footer" maxlength="120" value="${esc(print.shop.footer)}"></label><button type="submit">Lưu cài đặt in</button>`, { cls: 'box' })}
 ${form(ctx, 'password', `<h2>Đổi mật khẩu</h2><label>Mật khẩu mới (ít nhất 8 ký tự)<input type="password" name="password" required autocomplete="new-password"></label><button type="submit">Lưu mật khẩu</button>`, { cls: 'box' })}
-${ctx.inApp ? '<p><a class="btn2" href="lamanpos://settings">Cài đặt ứng dụng (bản đầy đủ/Lite, in thử)</a></p>' : ''}
+${ctx.inApp ? '<p><a class="btn2" href="lamanpos://settings">Cài đặt ứng dụng (in thử, tải lại)</a></p>' : ''}
 ${form(ctx, 'logout', '<button type="submit" class="danger">Đăng xuất</button>')}` });
 }

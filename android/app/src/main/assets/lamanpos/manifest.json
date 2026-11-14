@@ -1,0 +1,11 @@
+{
+  "manifest_version": 2,
+  "name": "Lam An POS bridge",
+  "version": "1.0",
+  "description": "Exposes window.LamAnAndroid (built-in printer) to the shop's web app.",
+  "browser_specific_settings": { "gecko": { "id": "lamanpos@laman.vn" } },
+  "content_scripts": [
+    { "matches": ["https://*/*"], "js": ["content.js"], "run_at": "document_start", "all_frames": false }
+  ],
+  "permissions": ["nativeMessaging", "nativeMessagingFromContent", "geckoViewAddons"]
+}

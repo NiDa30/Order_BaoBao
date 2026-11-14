@@ -1,3 +1,4 @@
+import './polyfills.js';
 import {buildExport,exportPage} from './data-export.js';
 import {isAdmin,canShift,reportTotals,paymentTotals,orderTotal,closesBeforeOpen} from './permissions.js';
 import {managementPages,proposalPanel} from './management-ui.js';

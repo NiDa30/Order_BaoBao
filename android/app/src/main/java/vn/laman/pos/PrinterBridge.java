@@ -18,7 +18,7 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * Bridge between the web app and the SUNMI built-in thermal printer.
- * Exposed to JavaScript as window.LamAnAndroid (info(), printBase64()).
+ * Exposed to the page as window.LamAnAndroid (info(), printBase64()) by the built-in WebExtension.
  * The web app sends ready-made ESC/POS bytes (GS v 0 raster for Vietnamese text).
  */
 public class PrinterBridge {
