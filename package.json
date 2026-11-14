@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0",
     "test": "playwright test",
-    "test:db": "bash scripts/test-database.sh"
+    "test:db": "bash scripts/test-database.sh",
+    "lite": "node scripts/lite-dev.js"
   },
   "devDependencies": {
     "@playwright/test": "^1.51.0",
