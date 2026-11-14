@@ -150,7 +150,14 @@ test('auto-print after payment uses the system dialog with only the receipt; pre
   expect(bill).toMatch(/TỔNG CỘNG\s+44\.000đ/);
   expect(bill).toContain('Thu ngân:');
   expect(await page.evaluate(() => window.__pageSize)).toMatch(/^@page\{size:80mm \d+mm;margin:0\}$/);
-  await expect(page.locator('#print-root')).toHaveCount(0);
+  // Chrome fires afterprint while its preview is still open: the receipt must survive it and stay printable.
+  await expect(page.locator('#print-root')).toHaveCount(1);
+  await page.emulateMedia({ media: 'print' });
+  await expect(page.locator('#print-root img')).toBeVisible();
+  expect(await page.locator('#print-root img').evaluate(i => i.complete && i.naturalWidth)).toBe(576);
+  await expect(page.locator('.sidebar')).toBeHidden();
+  await page.emulateMedia({ media: 'screen' });
+  await expect(page.locator('#print-root')).toBeHidden();
   await page.locator('.order-card').click();
   await expect(page.getByRole('button', { name: '🖨︎ In bill cho khách' })).toBeVisible();
 });

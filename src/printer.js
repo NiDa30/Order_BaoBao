@@ -210,8 +210,14 @@ export async function pairSerial(nav = globalThis.navigator) {
   catch (e) { if (e?.name === 'TypeError') return nav.serial.requestPort(); throw e; }
 }
 
-const browserPrint = (html, paper, heightMm, win = globalThis) => {
-  const doc = win.document, root = doc.createElement('div');
+// The receipt stays in the page (hidden on screen by CSS) until the next print. Chrome re-renders the
+// print preview from the live page while its dialog is open (and fires `afterprint` early), so removing
+// it on `afterprint` makes the preview blank and drops the @page size.
+const browserPrint = async (html, paper, heightMm, win = globalThis) => {
+  const doc = win.document;
+  doc.querySelector('#print-root')?.remove();
+  doc.querySelector('#print-page-size')?.remove();
+  const root = doc.createElement('div');
   root.id = 'print-root';
   root.dataset.paper = String(paper);
   root.innerHTML = html;
@@ -221,10 +227,9 @@ const browserPrint = (html, paper, heightMm, win = globalThis) => {
   style.textContent = `@page{size:${paper}mm ${heightMm}mm;margin:0}`;
   doc.head.appendChild(style);
   doc.body.classList.add('printing-receipt');
-  const cleanup = () => { root.remove(); style.remove(); doc.body.classList.remove('printing-receipt'); win.removeEventListener('afterprint', cleanup); };
-  win.addEventListener('afterprint', cleanup);
+  // Wait until the receipt images are decoded, otherwise the first preview can be empty.
+  await Promise.all([...root.querySelectorAll('img')].map(img => (img.decode ? img.decode().catch(() => {}) : null)));
   win.print();
-  setTimeout(cleanup, 60000);
 };
 
 /**
@@ -239,7 +244,7 @@ export async function send(jobs, settings, detection, { win = globalThis, fallba
     if (driver === 'system') {
       const pages = list.map(b => layout(b, PAPERS[paper].chars));
       const heightMm = Math.max(...pages.map(l => receiptHeightMm(l, paper, win.document)));
-      browserPrint(pages.map(l => `<div class="receipt-page">${receiptImage(l, paper, win.document)}</div>`).join(''), paper, heightMm, win);
+      await browserPrint(pages.map(l => `<div class="receipt-page">${receiptImage(l, paper, win.document)}</div>`).join(''), paper, heightMm, win);
       return { ok: true, driver, confirmed: false, message: 'Đã mở hộp thoại in. Chọn máy in của máy POS rồi bấm In.' };
     }
     const bytes = concat(list.map(b => buildJob(b, { paper, mode, doc: win.document }).bytes));
