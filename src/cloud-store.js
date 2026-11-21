@@ -19,6 +19,15 @@ function friendly(error) {
   if(error.message?.includes('Email not confirmed'))return 'Email chưa được xác nhận trong Supabase.';
   return 'Chưa kết nối được Supabase. Dữ liệu trên máy vẫn được giữ; hãy kiểm tra mạng và thử lại.';
 }
+// Why the last sync failed, so the UI never calls a network problem a missing permission.
+export function failureReason(error) {
+  if(error instanceof SyncConflict)return 'conflict';
+  if(error?.code==='42501')return 'permission';
+  if(['PGRST202','42P01','42883'].includes(error?.code))return 'setup';
+  if(error?.code||error?.status>=400)return 'server';
+  return 'network';
+}
+const detailOf=error=>[error?.code,error?.status,error?.name!=='Error'&&error?.name,error?.message].filter(Boolean).join(' · ').slice(0,300);
 export function createCloudStore(seed,{onData=()=>{},onStatus=()=>{}}={}) {
   let data=readJSON(LOCAL_KEY);
   if(!isSnapshot(data))data={menu:clone(seed),orders:[],closings:[],openings:[]};
@@ -26,7 +35,7 @@ export function createCloudStore(seed,{onData=()=>{},onStatus=()=>{}}={}) {
   if(url||key){try{if(!url||!key||new URL(url).protocol!=='https:'||!publicKey(key))throw new Error();}catch{configError='Cấu hình Supabase chưa hợp lệ. Chỉ dùng Project URL HTTPS và publishable/anon public key.';}}
   const client=url&&key&&!configError?createClient(url,key):null;
   let session=null,scope=null,envelope=null,running=false,again=false,generation=0,authReady=false,access=null;
-  const status={mode:configError?'config-error':client?'loading':'local',message:configError,email:'',lastSync:null};
+  const status={mode:configError?'config-error':client?'loading':'local',message:configError,email:'',lastSync:null,reason:'',detail:''};
   const notify=patch=>{Object.assign(status,patch);onStatus({...status,configured:!!client,pending:!!envelope&&!same(envelope.local,envelope.base)});};
   const writeCache=(value)=>localStorage.setItem(scope||LOCAL_KEY,JSON.stringify(value));
   const apply=(value)=>{if(same(data,value))return;data=clone(value);onData(clone(visibleData(data,access)));};
@@ -60,7 +69,7 @@ export function createCloudStore(seed,{onData=()=>{},onStatus=()=>{}}={}) {
     try {
       for(let attempt=0;attempt<4;attempt++) {
         if(token!==generation)return;
-        again=false;notify({mode:'syncing',message:'Đang đồng bộ với Supabase…'});
+        again=false;notify({mode:'syncing',message:'Đang đồng bộ với Supabase…',reason:'',detail:''});
         const {data:row,error}=await client.rpc('pos_read_workspace');
         if(error)throw error;
         if(token!==generation)return;
@@ -94,7 +103,7 @@ export function createCloudStore(seed,{onData=()=>{},onStatus=()=>{}}={}) {
     }catch(error){
       if(token!==generation)return;
       if(error.code==='42501'){access=null;onData(empty());}
-      notify({mode:error instanceof SyncConflict?'conflict':'error',message:friendly(error)});
+      notify({mode:error instanceof SyncConflict?'conflict':'error',message:friendly(error),reason:failureReason(error),detail:detailOf(error)});
     }finally{running=false;if(token!==generation&&session)void sync();}
   }
   async function setSession(next) {
@@ -103,12 +112,12 @@ export function createCloudStore(seed,{onData=()=>{},onStatus=()=>{}}={}) {
     if(!session){
       scope=null;envelope=null;access=null;
       const legacy=readJSON(LOCAL_KEY);apply(isSnapshot(legacy)?legacy:{menu:clone(seed),orders:[],closings:[],openings:[]});
-      notify({mode:client?'login':'local',email:'',lastSync:null,message:client?'Đăng nhập để lưu và dùng dữ liệu trên nhiều thiết bị.':''});return;
+      notify({mode:client?'login':'local',email:'',lastSync:null,reason:'',detail:'',message:client?'Đăng nhập để lưu và dùng dữ liệu trên nhiều thiết bị.':''});return;
     }
     scope=`lam-an-cloud-v2:${new URL(url).hostname}:${session.user.id}`;
     const cached=readJSON(scope);access=cached?.access||null;
     envelope=cached&&isSnapshot(cached.local)&&isSnapshot(cached.base)?cached:{base:empty(),local:{menu:[],orders:[],closings:[],openings:[]},revision:0};
-    apply(envelope.local);notify({mode:'loading',email:session.user.email||'',lastSync:null,message:'Đang tải dữ liệu tài khoản…'});
+    apply(envelope.local);notify({mode:'loading',email:session.user.email||'',lastSync:null,message:'Đang tải dữ liệu tài khoản…',reason:'',detail:''});
     // New accounts start with the menu only, never silently upload local sales.
     apply(envelope.local);
     await sync();
@@ -116,7 +125,7 @@ export function createCloudStore(seed,{onData=()=>{},onStatus=()=>{}}={}) {
   async function start() {
     if(!client){authReady=true;notify({});return;}
     const {data:auth,error}=await client.auth.getSession();
-    if(error){authReady=true;notify({mode:'error',message:friendly(error)});return;}
+    if(error){authReady=true;notify({mode:'error',message:friendly(error),reason:failureReason(error),detail:detailOf(error)});return;}
     await setSession(auth.session);
     client.auth.onAuthStateChange((_event,next)=>{
       // Avoid awaiting Supabase calls in the auth callback (auth-js lock).

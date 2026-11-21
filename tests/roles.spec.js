@@ -144,3 +144,13 @@ test('admin filters shift open and close history by staff',async({page,context})
  await expect(page.locator('.shift-log-row')).toContainText('Nhân viên B');
  await expect(page.locator('.shift-log-row')).toContainText('admin@example.test');
 });
+test('network failure after login is not reported as a missing permission',async({page,context})=>{
+ const server={offline:true,workspace:null};await mock(context,server);await page.goto('/');await page.locator('#cloud-login [name=email]').fill('pos@example.test');await page.locator('#cloud-login [name=password]').fill('synthetic-test-password');await page.getByRole('button',{name:'Đăng nhập',exact:true}).click();
+ await expect(page.locator('.access-screen h1')).toHaveText('Chưa kết nối được máy chủ');await expect(page.locator('.access-screen')).toContainText('pos@example.test');await expect(page.locator('.access-screen')).toContainText('không phải');await expect(page.locator('.access-detail')).toBeVisible();
+ server.offline=false;await page.getByRole('button',{name:'Thử lại',exact:true}).click();await expect(page.locator('.topbar [data-cloud-label]')).toHaveText('Đã đồng bộ');await expect(page.locator('[data-page=team]:visible')).toHaveCount(1);
+});
+test('blocked membership names the signed-in email; wrong device clock is flagged',async({page,context})=>{
+ const server={blocked:true,workspace:null};await mock(context,server);await page.goto('/');await page.locator('#cloud-login [name=email]').fill('pos@example.test');await page.locator('#cloud-login [name=password]').fill('synthetic-test-password');await page.getByRole('button',{name:'Đăng nhập',exact:true}).click();
+ await expect(page.locator('.access-screen h1')).toHaveText('Tài khoản chưa được cấp quyền');await expect(page.locator('.access-screen')).toContainText('đang hoạt động');await expect(page.locator('.access-screen .form-error')).toHaveCount(0);
+ await page.clock.setSystemTime(new Date('2016-01-01T08:00:00Z'));await page.getByRole('button',{name:'Thử lại',exact:true}).click();await expect(page.locator('.access-screen .form-error')).toContainText('Ngày giờ trên máy');
+});
